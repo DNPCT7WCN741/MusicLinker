@@ -1,9 +1,14 @@
 import SwiftUI
+import Combine
 
+// 2. 定义视图
 struct ContentView: View {
+    // 使用 @StateObject 管理服务实例
     @StateObject private var service = OdesliService()
+    
     @State private var inputURL = ""
     @State private var isShowingResult = false
+    @State private var theme: AppTheme = .dark
     @FocusState private var isInputFocused: Bool
 
     var body: some View {
@@ -11,11 +16,7 @@ struct ContentView: View {
             ZStack {
                 // Background gradient
                 LinearGradient(
-                    colors: [
-                        Color(hex: "#0F0F1A"),
-                        Color(hex: "#1A1025"),
-                        Color(hex: "#0D1520")
-                    ],
+                    colors: theme.backgroundColors,
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
@@ -24,13 +25,13 @@ struct ContentView: View {
                 // Ambient orbs
                 GeometryReader { geo in
                     Circle()
-                        .fill(Color(hex: "#7C3AED").opacity(0.15))
+                        .fill(theme.accent.opacity(0.15))
                         .frame(width: 300, height: 300)
                         .blur(radius: 80)
                         .offset(x: -50, y: 100)
 
                     Circle()
-                        .fill(Color(hex: "#DB2777").opacity(0.12))
+                        .fill(theme.accentSecondary.opacity(0.12))
                         .frame(width: 250, height: 250)
                         .blur(radius: 70)
                         .offset(x: geo.size.width - 150, y: geo.size.height - 300)
@@ -54,7 +55,7 @@ struct ContentView: View {
                             } else if let error = service.errorMessage {
                                 errorView(message: error)
                             } else if let result = service.result {
-                                ResultView(result: result)
+                                ResultView(result: result, theme: theme)
                                     .transition(.asymmetric(
                                         insertion: .move(edge: .bottom).combined(with: .opacity),
                                         removal: .opacity
@@ -71,7 +72,7 @@ struct ContentView: View {
             }
             .navigationBarHidden(true)
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(theme.preferredColorScheme)
     }
 
     // MARK: - Subviews
@@ -79,32 +80,31 @@ struct ContentView: View {
     private var headerView: some View {
         VStack(spacing: 6) {
             HStack(spacing: 10) {
-                Image(systemName: "link.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [Color(hex: "#A78BFA"), Color(hex: "#F472B6")],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-
                 Text("MusicLinker")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                     .foregroundStyle(
                         LinearGradient(
-                            colors: [Color(hex: "#E2D9F3"), Color.white],
+                            colors: [theme.textPrimary, theme.accent],
                             startPoint: .leading,
                             endPoint: .trailing
                         )
                     )
-            }
 
-            Text("跨平台音乐链接聚合")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(Color(hex: "#A78BFA").opacity(0.8))
-                .tracking(2)
+                Spacer()
+
+                Button(action: toggleTheme) {
+                    Image(systemName: theme == .dark ? "sun.max.fill" : "moon.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 38, height: 38)
+                        .foregroundColor(theme.textPrimary)
+                        .background(
+                            Circle()
+                                .fill(theme.surfaceAlt)
+                        )
+                }
+            }
         }
+        .padding(.horizontal, 20)
         .padding(.bottom, 24)
     }
 
@@ -114,21 +114,21 @@ struct ContentView: View {
             HStack {
                 Image(systemName: "music.note")
                     .font(.system(size: 13))
-                    .foregroundColor(Color(hex: "#A78BFA"))
+                    .foregroundColor(theme.accent)
                 Text("粘贴音乐链接")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(Color(hex: "#A78BFA"))
+                    .foregroundColor(theme.accent)
                 Spacer()
             }
 
             // Input field
             HStack(spacing: 12) {
                 TextField("", text: $inputURL, prompt: Text("支持 Spotify / Apple Music / 网易云 / 酷狗…")
-                    .foregroundColor(Color.white.opacity(0.25))
+                    .foregroundColor(theme.textSecondary.opacity(0.6))
                     .font(.system(size: 14))
                 )
                 .font(.system(size: 14))
-                .foregroundColor(.white)
+                .foregroundColor(theme.textPrimary)
                 .focused($isInputFocused)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
@@ -148,13 +148,13 @@ struct ContentView: View {
             .padding(.vertical, 14)
             .background(
                 RoundedRectangle(cornerRadius: 14)
-                    .fill(Color.white.opacity(0.07))
+                    .fill(theme.surfaceAlt.opacity(theme == .dark ? 0.25 : 0.9))
                     .overlay(
                         RoundedRectangle(cornerRadius: 14)
                             .stroke(
                                 isInputFocused
-                                    ? Color(hex: "#7C3AED").opacity(0.6)
-                                    : Color.white.opacity(0.1),
+                                    ? theme.accent.opacity(0.6)
+                                    : theme.cardStroke,
                                 lineWidth: 1
                             )
                     )
@@ -165,15 +165,15 @@ struct ContentView: View {
                 Button(action: pasteFromClipboard) {
                     Label("粘贴", systemImage: "doc.on.clipboard")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(Color(hex: "#C4B5FD"))
+                        .foregroundColor(theme.accent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                         .background(
                             RoundedRectangle(cornerRadius: 12)
-                                .fill(Color(hex: "#7C3AED").opacity(0.15))
+                                .fill(theme.accent.opacity(0.15))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 12)
-                                        .stroke(Color(hex: "#7C3AED").opacity(0.3), lineWidth: 1)
+                                        .stroke(theme.accent.opacity(0.3), lineWidth: 1)
                                 )
                         )
                 }
@@ -181,7 +181,7 @@ struct ContentView: View {
                 Button(action: search) {
                     Label("搜索", systemImage: "magnifyingglass")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.white)
+                        .foregroundColor(theme.textPrimary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                         .background(
@@ -189,8 +189,8 @@ struct ContentView: View {
                                 .fill(
                                     LinearGradient(
                                         colors: inputURL.isEmpty
-                                            ? [Color(hex: "#4B2E83"), Color(hex: "#6B21A8")]
-                                            : [Color(hex: "#7C3AED"), Color(hex: "#DB2777")],
+                                            ? [theme.surfaceAlt, theme.surface]
+                                            : [theme.accent, theme.accentSecondary],
                                         startPoint: .leading,
                                         endPoint: .trailing
                                     )
@@ -204,10 +204,10 @@ struct ContentView: View {
         .padding(20)
         .background(
             RoundedRectangle(cornerRadius: 20)
-                .fill(Color.white.opacity(0.05))
+                .fill(theme.surfaceAlt.opacity(theme == .dark ? 0.18 : 0.9))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        .stroke(theme.cardStroke, lineWidth: 1)
                 )
         )
     }
@@ -215,20 +215,21 @@ struct ContentView: View {
     private var loadingView: some View {
         VStack(spacing: 16) {
             ProgressView()
-                .progressViewStyle(CircularProgressViewStyle(tint: Color(hex: "#A78BFA")))
+                .progressViewStyle(CircularProgressViewStyle(tint: theme.accent))
                 .scaleEffect(1.4)
 
             Text("正在查找各平台链接…")
                 .font(.system(size: 14))
-                .foregroundColor(Color.white.opacity(0.5))
+                .foregroundColor(theme.textSecondary)
         }
         .frame(maxWidth: .infinity)
         .padding(40)
         .background(
             RoundedRectangle(cornerRadius: 20)
-                .fill(Color.white.opacity(0.04))
+                .fill(theme.surfaceAlt.opacity(theme == .dark ? 0.16 : 0.8))
         )
     }
+
 
     private func errorView(message: String) -> some View {
         VStack(spacing: 12) {
@@ -238,11 +239,11 @@ struct ContentView: View {
 
             Text("无法获取链接")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.white)
+                .foregroundColor(theme.textPrimary)
 
             Text(message)
                 .font(.system(size: 13))
-                .foregroundColor(Color.white.opacity(0.5))
+                .foregroundColor(theme.textSecondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
@@ -263,7 +264,7 @@ struct ContentView: View {
             VStack(spacing: 12) {
                 Text("支持的平台")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(Color.white.opacity(0.3))
+                    .foregroundColor(theme.textSecondary.opacity(0.7))
                     .tracking(2)
 
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 12) {
@@ -274,13 +275,13 @@ struct ContentView: View {
                                 .frame(width: 8, height: 8)
                             Text(platform.name)
                                 .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(Color.white.opacity(0.6))
+                                .foregroundColor(theme.textSecondary)
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)
                         .background(
                             RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.white.opacity(0.05))
+                                .fill(theme.surfaceAlt.opacity(theme == .dark ? 0.15 : 0.72))
                         )
                     }
                 }
@@ -288,31 +289,35 @@ struct ContentView: View {
             .padding(20)
             .background(
                 RoundedRectangle(cornerRadius: 20)
-                    .fill(Color.white.opacity(0.03))
+                    .fill(theme.surfaceAlt.opacity(theme == .dark ? 0.18 : 0.95))
                     .overlay(
                         RoundedRectangle(cornerRadius: 20)
-                            .stroke(Color.white.opacity(0.07), lineWidth: 1)
+                            .stroke(theme.cardStroke, lineWidth: 1)
                     )
             )
         }
     }
 
     // MARK: - Actions
-
+    
     private func pasteFromClipboard() {
         if let string = UIPasteboard.general.string {
             inputURL = string
         }
     }
-
+    
     private func search() {
         guard !inputURL.isEmpty else { return }
         isInputFocused = false
         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
             Task {
-                await service.fetchLinks(for: inputURL)
+                await service.fetchLinks(url: inputURL)
             }
         }
+    }
+
+    private func toggleTheme() {
+        theme = theme == .dark ? .light : .dark
     }
 
     // MARK: - Data

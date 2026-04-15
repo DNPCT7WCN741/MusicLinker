@@ -20,6 +20,7 @@ struct MusicEntity: Codable {
     let thumbnailHeight: Int?
     let apiProvider: String
     let platforms: [String]
+    let releaseDate: String?
 }
 
 struct PlatformLinks: Codable {
@@ -38,7 +39,7 @@ enum MusicPlatform: String, CaseIterable {
     case netease = "netease"
     case qqMusic = "tidal"       // Odesli doesn't support QQ/Netease natively
     case youtubeMusic = "youtubeMusic"
-    case tidal = "tidal"
+    case tidal = "tidal1"
     case deezer = "deezer"
     case amazonMusic = "amazonMusic"
     case pandora = "pandora"
@@ -103,6 +104,19 @@ struct AppPlatformLink: Identifiable {
 }
 
 // MARK: - Odesli Service
+import SwiftUI
+import SwiftData // 截图显示你还用了 SwiftData，保留它
+import Combine // ✅ 确保这一行存在
+
+@Observable // 使用这个宏
+class MyData {
+    var name: String = ""
+    // 不需要写 objectWillChange
+}
+@Observable // 使用宏，连 ObservableObject 协议都不需要写
+class MyModel {
+    var name = "Tashkent"
+}
 
 class OdesliService: ObservableObject {
     @Published var isLoading = false
@@ -111,8 +125,8 @@ class OdesliService: ObservableObject {
 
     private let baseURL = "https://api.song.link/v1-alpha.1/links"
 
-    func fetchLinks(for urlString: String) async {
-        guard let encodedURL = urlString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+    func fetchLinks(url: String) async {
+        guard let encodedURL = url.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
               let requestURL = URL(string: "\(baseURL)?url=\(encodedURL)&userCountry=CN&songIfSingle=true") else {
             await MainActor.run {
                 self.errorMessage = "无效的链接格式"
@@ -188,9 +202,15 @@ class OdesliService: ObservableObject {
             }
         }
 
+        let albumTitle = response.entitiesByUniqueId.values.first { $0.type == "album" }?.title
+        let releaseDate = entity?.releaseDate ?? response.entitiesByUniqueId.values.first { $0.releaseDate != nil }?.releaseDate
+        let releaseYear = releaseDate.map { String($0.prefix(4)) }
+
         return SongResult(
             title: entity?.title ?? "未知歌曲",
             artist: entity?.artistName ?? "未知艺术家",
+            album: albumTitle,
+            releaseYear: releaseYear,
             thumbnailUrl: entity?.thumbnailUrl,
             songLinkUrl: response.pageUrl,
             platforms: links
@@ -203,6 +223,8 @@ class OdesliService: ObservableObject {
 struct SongResult {
     let title: String
     let artist: String
+    let album: String?
+    let releaseYear: String?
     let thumbnailUrl: String?
     let songLinkUrl: String
     let platforms: [AppPlatformLink]
