@@ -11,8 +11,6 @@
 | Spotify | ✅ |
 | Apple Music | ✅ |
 | YouTube Music | ✅ |
-| 网易云音乐 | ✅（通过 song.link 识别）|
-| 酷狗音乐 | ✅（通过 song.link 识别）|
 | Tidal | ✅ |
 | Deezer | ✅ |
 | Amazon Music | ✅ |
