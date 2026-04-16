@@ -11,8 +11,6 @@
 | Spotify | ✅ |
 | Apple Music | ✅ |
 | YouTube Music | ✅ |
-| 网易云音乐 | ✅（通过 song.link 识别）|
-| 酷狗音乐 | ✅（通过 song.link 识别）|
 | Tidal | ✅ |
 | Deezer | ✅ |
 | Amazon Music | ✅ |
@@ -100,4 +98,4 @@ GET https://api.song.link/v1-alpha.1/links?url={encoded_url}&userCountry=CN
 - [ ] Shortcut / Widget 支持（iOS 主屏幕小组件）
 - [ ] Share Extension（在其他 App 内直接分享到 MusicLinker）
 - [ ] 收藏功能
-- [ ] 国产平台直接支持（网易云 / QQ 音乐官方 API，需申请 Key）
+- [ ] 国产平台直接支持（网易云 / QQ 音乐/酷狗音乐官方 API，需申请 Key）

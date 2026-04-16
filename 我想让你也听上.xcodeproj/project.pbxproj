@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		5B405BAB2F90F10700708540 /* appicon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5B405BAA2F90F10700708540 /* appicon.icon */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		5B6EBFE12F8FD16100FC59F5 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -24,6 +28,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		5B405BAA2F90F10700708540 /* appicon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = appicon.icon; sourceTree = "<group>"; };
 		5B6EBFD12F8FD16000FC59F5 /* 我想让你也听上.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "我想让你也听上.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5B6EBFE02F8FD16100FC59F5 /* 我想让你也听上Tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "我想让你也听上Tests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5B6EBFEA2F8FD16100FC59F5 /* 我想让你也听上UITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "我想让你也听上UITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -79,6 +84,7 @@
 				5B6EBFE32F8FD16100FC59F5 /* 我想让你也听上Tests */,
 				5B6EBFED2F8FD16100FC59F5 /* 我想让你也听上UITests */,
 				5B6EBFD22F8FD16000FC59F5 /* Products */,
+				5B405BAA2F90F10700708540 /* appicon.icon */,
 			);
 			sourceTree = "<group>";
 		};
@@ -212,6 +218,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5B405BAB2F90F10700708540 /* appicon.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -391,10 +398,13 @@
 		5B6EBFF52F8FD16100FC59F5 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = appicon;
+				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=iphoneos*]" = appicon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = HHC687M3TQ;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -422,10 +432,12 @@
 		5B6EBFF62F8FD16100FC59F5 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = appicon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = HHC687M3TQ;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

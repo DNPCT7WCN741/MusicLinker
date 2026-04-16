@@ -2,6 +2,7 @@ import SwiftUI
 import Combine
 import UIKit
 
+// MARK: - Search History Model
 struct SearchHistoryItem: Identifiable, Codable {
     let id = UUID()
     let url: String
@@ -9,8 +10,12 @@ struct SearchHistoryItem: Identifiable, Codable {
     let title: String?
     let artist: String?
 
-    var songName: String? {
-        title
+    var displayText: String {
+        if let title = title, let artist = artist {
+            return "\(title) - \(artist)"
+        } else {
+            return url
+        }
     }
 }
 
@@ -93,6 +98,7 @@ struct ContentView: View {
                 .ignoresSafeArea()
             )
             .navigationBarHidden(true)
+            // Remove onAppear to avoid any startup operations
         }
         .preferredColorScheme(theme.preferredColorScheme)
     }
@@ -100,9 +106,7 @@ struct ContentView: View {
     // MARK: - Subviews
 
     private var headerView: some View {
-        let validHistory = searchHistory.filter { $0.songName != nil }
-
-        return VStack(spacing: 6) {
+        VStack(spacing: 6) {
             HStack(spacing: 10) {
                 Text("MusicLinker")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
@@ -116,41 +120,51 @@ struct ContentView: View {
 
                 Spacer()
 
-                if !validHistory.isEmpty {
-                    Menu {
-                        ForEach(validHistory.prefix(10)) { item in
-                            if let songName = item.songName {
-                                Button(action: { selectHistoryItem(item) }) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(songName)
-                                            .font(.system(size: 14, weight: .medium))
-                                            .foregroundColor(.primary)
-                                            .lineLimit(1)
-                                        Text(item.timestamp, style: .date)
-                                            .font(.system(size: 12))
-                                            .foregroundColor(.secondary)
-                                    }
+                // History menu button
+                Menu {
+                    if !historyLoaded {
+                        Button(action: {
+                            loadHistoryFromStorage()
+                            historyLoaded = true
+                        }) {
+                            Text("加载搜索记录")
+                                .foregroundColor(.blue)
+                        }
+                    } else if searchHistory.isEmpty {
+                        Text("暂无搜索记录")
+                            .foregroundColor(.gray)
+                    } else {
+                        ForEach(searchHistory.prefix(10)) { item in
+                            Button(action: { selectHistoryItem(item) }) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.displayText)
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(.primary)
+                                        .lineLimit(1)
+                                    Text(item.timestamp, style: .date)
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.secondary)
                                 }
                             }
                         }
-
-                        if validHistory.count > 10 {
+                        
+                        if searchHistory.count > 10 {
                             Divider()
                             Button(action: clearSearchHistory) {
                                 Text("清空记录")
                                     .foregroundColor(.red)
                             }
                         }
-                    } label: {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .font(.system(size: 18, weight: .semibold))
-                            .frame(width: 38, height: 38)
-                            .foregroundColor(theme.textPrimary)
-                            .background(
-                                Circle()
-                                    .fill(theme.surfaceAlt)
-                            )
                     }
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 38, height: 38)
+                        .foregroundColor(theme.textPrimary)
+                        .background(
+                            Circle()
+                                .fill(theme.surfaceAlt)
+                        )
                 }
 
                 Button(action: toggleTheme) {

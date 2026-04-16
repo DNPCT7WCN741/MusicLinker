@@ -60,7 +60,6 @@ struct URLHandler {
 
  And add this to handle incoming URLs in your App struct:
 
- @main
  struct MusicLinkerApp: App {
      var body: some Scene {
          WindowGroup {

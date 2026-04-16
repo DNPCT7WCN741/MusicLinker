@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AVFoundation
 import CoreImage
 
 enum AppTheme {
@@ -82,6 +83,11 @@ struct ResultView: View {
     @State private var isShowingSaveAlert = false
     @State private var saveAlertMessage: String = ""
     @State private var photoSaver: PhotoSaver? = nil
+    @State private var previewURL: URL? = nil
+    @State private var player: AVPlayer? = nil
+    @State private var isPlayingPreview: Bool = false
+    @State private var previewLoading: Bool = false
+    @State private var previewError: String? = nil
 
     var body: some View {
         VStack(spacing: 16) {
@@ -119,11 +125,16 @@ struct ResultView: View {
             // Song.link button
             songLinkButton
         }
-        .task(id: result.thumbnailUrl) {
-            await loadCoverImage()
-        }
+        // Remove onAppear to avoid automatic network requests
         .sheet(isPresented: $isShowingShareSheet) {
             ActivityViewController(activityItems: shareItems)
+        }
+        .alert("试听失败", isPresented: Binding(get: { previewError != nil }, set: { if !$0 { previewError = nil }})) {
+            Button("知道了", role: .cancel) {
+                previewError = nil
+            }
+        } message: {
+            Text(previewError ?? "无法获取试听音源")
         }
     }
 
@@ -222,41 +233,72 @@ struct ResultView: View {
 
             posterPreview
 
-            HStack(spacing: 12) {
-                Button(action: sharePoster) {
+            VStack(spacing: 12) {
+                Button(action: playPreviewAction) {
                     HStack(spacing: 10) {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.system(size: 15, weight: .semibold))
-                        Text("分享海报")
-                            .font(.system(size: 14, weight: .semibold))
+                        Image(systemName: isPlayingPreview ? "stop.fill" : "play.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                        Text(isPlayingPreview ? "停止试听" : "试听15秒")
+                            .font(.system(size: 16, weight: .semibold))
                     }
                     .foregroundColor(Color.white)
-                    .padding(.vertical, 14)
+                    .padding(.vertical, 16)
                     .frame(maxWidth: .infinity)
                     .background(
-                        RoundedRectangle(cornerRadius: 16)
+                        RoundedRectangle(cornerRadius: 18)
                             .fill(LinearGradient(
-                                colors: [Color(hex: "#7C3AED"), Color(hex: "#DB2777")],
+                                colors: [theme.accent, theme.accentSecondary],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             ))
                     )
                 }
-
-                Button(action: savePosterToAlbum) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "photo.on.rectangle.angled")
-                            .font(.system(size: 15, weight: .semibold))
-                        Text("保存到相册")
-                            .font(.system(size: 14, weight: .semibold))
+                .disabled(previewLoading)
+                .overlay(
+                    Group {
+                        if previewLoading {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        }
                     }
-                    .foregroundColor(theme.textPrimary)
-                    .padding(.vertical, 14)
-                    .frame(maxWidth: .infinity)
-                    .background(
-                        RoundedRectangle(cornerRadius: 16)
-                            .fill(theme.surfaceAlt.opacity(theme == .dark ? 0.12 : 0.6))
-                    )
+                )
+
+                HStack(spacing: 12) {
+                    Button(action: sharePoster) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 15, weight: .semibold))
+                            Text("分享海报")
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                        .foregroundColor(Color.white)
+                        .padding(.vertical, 14)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(LinearGradient(
+                                    colors: [Color(hex: "#7C3AED"), Color(hex: "#DB2777")],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                ))
+                        )
+                    }
+
+                    Button(action: savePosterToAlbum) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "photo.on.rectangle.angled")
+                                .font(.system(size: 15, weight: .semibold))
+                            Text("保存到相册")
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                        .foregroundColor(theme.textPrimary)
+                        .padding(.vertical, 14)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(theme.surfaceAlt.opacity(theme == .dark ? 0.12 : 0.6))
+                        )
+                    }
                 }
             }
             .alert(saveAlertMessage, isPresented: $isShowingSaveAlert) {
@@ -284,22 +326,10 @@ struct ResultView: View {
 
     private var posterCard: some View {
         ZStack {
-            Group {
-                if let uiImage = coverUIImage {
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .scaledToFill()
-                        .blur(radius: 48)
-                        .overlay(Color.black.opacity(0.45))
-                } else {
-                    LinearGradient(
-                        colors: [dominantColor, dominantColor.opacity(0.75), Color.black],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                }
-            }
-            .ignoresSafeArea()
+            Rectangle()
+                .fill(dominantColor)
+                .opacity(0.95)
+                .ignoresSafeArea()
 
             VStack(spacing: 20) {
                 Spacer(minLength: 24)
@@ -413,6 +443,7 @@ struct ResultView: View {
     }
 
     private func sharePoster() {
+        buttonFeedback()
         guard let image = renderPosterImage() else { return }
         copyAllPlatformLinksToClipboard()
         shareItems = [image]
@@ -420,6 +451,7 @@ struct ResultView: View {
     }
 
     private func savePosterToAlbum() {
+        buttonFeedback()
         guard let image = renderPosterImage() else { return }
         let saver = PhotoSaver { error in
             if let error = error {
@@ -432,6 +464,121 @@ struct ResultView: View {
         }
         photoSaver = saver
         UIImageWriteToSavedPhotosAlbum(image, saver, #selector(PhotoSaver.image(_:didFinishSavingWithError:contextInfo:)), nil)
+    }
+
+    private func playPreviewAction() {
+        if isPlayingPreview {
+            stopPreview()
+            return
+        }
+        if let url = previewURL {
+            playPreview(url: url)
+        } else {
+            previewLoading = true
+            fetchPreviewURL()
+        }
+    }
+
+    private func fetchPreviewURL() {
+        let query = "\(result.title) \(result.artist)"
+        guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+            previewLoading = false
+            previewError = "无法构造试听请求"
+            return
+        }
+
+        Task {
+            do {
+                // Try Deezer API first
+                if let deezerURL = try await searchDeezerPreview(query: encodedQuery) {
+                    previewURL = deezerURL
+                    playPreview(url: deezerURL)
+                    previewLoading = false
+                    return
+                }
+
+                // Fallback to Spotify if Deezer fails
+                let token = try await fetchSpotifyAccessToken()
+                guard let token = token else {
+                    previewError = "无法获取访问令牌"
+                    previewLoading = false
+                    return
+                }
+
+                guard let url = URL(string: "https://api.spotify.com/v1/search?q=track:\"\(result.title)\" artist:\"\(result.artist)\"&type=track&limit=5") else {
+                    previewLoading = false
+                    previewError = "无法构造试听请求"
+                    return
+                }
+
+                var request = URLRequest(url: url)
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+                let (data, _) = try await URLSession.shared.data(for: request)
+                let searchResponse = try JSONDecoder().decode(SpotifySearchResponse.self, from: data)
+                guard let track = searchResponse.tracks.items.first,
+                      let previewString = track.preview_url,
+                      let previewLink = URL(string: previewString) else {
+                    previewError = "未找到试听源"
+                    previewLoading = false
+                    return
+                }
+
+                previewURL = previewLink
+                playPreview(url: previewLink)
+            } catch {
+                previewError = "试听加载失败：\(error.localizedDescription)"
+            }
+            previewLoading = false
+        }
+    }
+
+    private func searchDeezerPreview(query: String) async throws -> URL? {
+        guard let url = URL(string: "https://api.deezer.com/search?q=\(query)&limit=1") else {
+            return nil
+        }
+
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let searchResponse = try JSONDecoder().decode(DeezerSearchResponse.self, from: data)
+
+        guard let track = searchResponse.data.first,
+              let previewURL = track.preview,
+              let previewLink = URL(string: previewURL) else {
+            return nil
+        }
+
+        return previewLink
+    }
+
+    private func fetchSpotifyAccessToken() async throws -> String? {
+        guard let url = URL(string: "https://open.spotify.com/get_access_token?reason=transport&productType=web_player") else {
+            return nil
+        }
+
+        var request = URLRequest(url: url)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148", forHTTPHeaderField: "User-Agent")
+
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let tokenResponse = try JSONDecoder().decode(SpotifyTokenResponse.self, from: data)
+        return tokenResponse.accessToken
+    }
+
+    private func playPreview(url: URL) {
+        stopPreview()
+        player = AVPlayer(url: url)
+        player?.play()
+        isPlayingPreview = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
+            self.stopPreview()
+        }
+    }
+
+    private func stopPreview() {
+        player?.pause()
+        player = nil
+        isPlayingPreview = false
     }
 
     private func copyAllPlatformLinksToClipboard() {
@@ -479,11 +626,13 @@ struct ResultView: View {
     // MARK: - Actions
 
     private func openURL(_ urlString: String) {
+        buttonFeedback()
         guard let url = URL(string: urlString) else { return }
         UIApplication.shared.open(url)
     }
 
     private func copyURL(_ urlString: String) {
+        buttonFeedback()
         UIPasteboard.general.string = urlString
         withAnimation(.spring(response: 0.3)) {
             copiedURL = urlString
@@ -493,6 +642,11 @@ struct ResultView: View {
                 copiedURL = nil
             }
         }
+    }
+
+    private func buttonFeedback() {
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
     }
 }
 
@@ -516,6 +670,57 @@ struct ActivityViewController: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+// MARK: - Spotify Preview Models
+
+private struct SpotifyTokenResponse: Codable {
+    let accessToken: String
+    let accessTokenExpirationTimestampMs: Int?
+    let clientId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case accessToken = "accessToken"
+        case accessTokenExpirationTimestampMs
+        case clientId
+    }
+}
+
+private struct DeezerSearchResponse: Codable {
+    let data: [DeezerTrack]
+}
+
+private struct DeezerTrack: Codable {
+    let preview: String?
+}
+
+private struct SpotifySearchResponse: Codable {
+    let tracks: SpotifyTrackContainer
+}
+
+private struct SpotifyTrackContainer: Codable {
+    let items: [SpotifyTrack]
+}
+
+private struct SpotifyTrack: Codable {
+    let preview_url: String?
+    let name: String?
+    let artists: [SpotifyArtist]?
+    let album: SpotifyAlbum?
+}
+
+private struct SpotifyArtist: Codable {
+    let name: String?
+}
+
+private struct SpotifyAlbum: Codable {
+    let images: [SpotifyImage]?
+}
+
+private struct SpotifyImage: Codable {
+    let url: String?
+    let height: Int?
+    let width: Int?
 }
 
 extension UIImage {
