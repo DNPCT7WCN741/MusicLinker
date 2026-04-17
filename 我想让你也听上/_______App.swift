@@ -12,7 +12,7 @@ struct _______App: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environment(\.locale, Locale(identifier: "zh_CN"))
+                .environmentObject(LanguageManager.shared)
         }
     }
 }

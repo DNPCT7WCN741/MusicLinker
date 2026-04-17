@@ -3,6 +3,57 @@ import UIKit
 import AVFoundation
 import CoreImage
 
+// MARK: - Album Cover Service
+class AlbumCoverService {
+    static func fetchAlbumCover(artist: String, album: String) async -> String? {
+        let encodedArtist = artist.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let encodedAlbum = album.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        
+        // Use Last.fm API (you can get a free API key from https://www.last.fm/api)
+        let apiKey = "your_lastfm_api_key_here" // Replace with actual API key
+        let urlString = "https://ws.audioscrobbler.com/2.0/?method=album.getinfo&artist=\(encodedArtist)&album=\(encodedAlbum)&api_key=\(apiKey)&format=json"
+        
+        guard let url = URL(string: urlString) else { return nil }
+        
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let response = try JSONDecoder().decode(LastFmResponse.self, from: data)
+            
+            // Try to get the largest image
+            if let images = response.album?.image {
+                for image in images.reversed() { // Start from largest
+                    if let url = image.url, !url.isEmpty, url != "https://lastfm.freetls.fastly.net/i/u/300x300/2a96cbd8b46e442fc41c2b86b821562f.png" {
+                        return url
+                    }
+                }
+            }
+        } catch {
+            print("Failed to fetch album cover: \(error)")
+        }
+        
+        return nil
+    }
+}
+
+// MARK: - Last.fm API Models
+struct LastFmResponse: Codable {
+    let album: LastFmAlbum?
+}
+
+struct LastFmAlbum: Codable {
+    let image: [LastFmImage]?
+}
+
+struct LastFmImage: Codable {
+    let url: String?
+    let size: String?
+
+    enum CodingKeys: String, CodingKey {
+        case url = "#text"
+        case size
+    }
+}
+
 enum AppTheme {
     case dark
     case light
@@ -74,6 +125,7 @@ enum AppTheme {
 struct ResultView: View {
     let result: SongResult
     let theme: AppTheme
+    @EnvironmentObject var languageManager: LanguageManager
     @State private var copiedURL: String? = nil
     @State private var coverUIImage: UIImage?
     @State private var dominantColor = Color(hex: "#7C3AED")
@@ -82,12 +134,12 @@ struct ResultView: View {
     @State private var renderedPoster: UIImage?
     @State private var isShowingSaveAlert = false
     @State private var saveAlertMessage: String = ""
-    @State private var photoSaver: PhotoSaver? = nil
     @State private var previewURL: URL? = nil
-    @State private var player: AVPlayer? = nil
-    @State private var isPlayingPreview: Bool = false
-    @State private var previewLoading: Bool = false
-    @State private var previewError: String? = nil
+    @State private var videoURL: URL? = nil
+    @State private var isGeneratingVideo: Bool = false
+    @State private var errorMessage: String? = nil
+    @State private var videoSaver: VideoSaver? = nil
+    @State private var lastFmCoverUrl: String?
 
     var body: some View {
         VStack(spacing: 16) {
@@ -100,12 +152,12 @@ struct ResultView: View {
             // Platform links
             VStack(spacing: 10) {
                 HStack {
-                    Text("在以下平台收听")
+                    Text(languageManager.translate("result.platforms"))
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(theme.textSecondary.opacity(0.7))
                         .tracking(2)
                     Spacer()
-                    Text("\(result.platforms.count) 个平台")
+                    Text("\(result.platforms.count) " + languageManager.translate("result.platforms.count"))
                         .font(.system(size: 12))
                         .foregroundColor(theme.textSecondary.opacity(0.5))
                 }
@@ -125,16 +177,39 @@ struct ResultView: View {
             // Song.link button
             songLinkButton
         }
-        // Remove onAppear to avoid automatic network requests
+        .onAppear {
+            // Load cover image if available
+            Task {
+                await loadCoverImage()
+            }
+            
+            // Try to fetch album cover from Last.fm if not available
+            if result.thumbnailUrl == nil || result.thumbnailUrl?.isEmpty == true {
+                Task {
+                    if let coverUrl = await AlbumCoverService.fetchAlbumCover(artist: result.artist, album: result.album ?? result.title) {
+                        await MainActor.run {
+                            lastFmCoverUrl = coverUrl
+                            // Reload cover image with Last.fm URL
+                            Task {
+                                await loadCoverImage()
+                            }
+                        }
+                    }
+                }
+            }
+        }
         .sheet(isPresented: $isShowingShareSheet) {
             ActivityViewController(activityItems: shareItems)
         }
-        .alert("试听失败", isPresented: Binding(get: { previewError != nil }, set: { if !$0 { previewError = nil }})) {
-            Button("知道了", role: .cancel) {
-                previewError = nil
+        .alert(languageManager.translate("result.videoFailed"), isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil }})) {
+            Button(languageManager.translate("result.ok"), role: .cancel) {
+                errorMessage = nil
             }
         } message: {
-            Text(previewError ?? "无法获取试听音源")
+            Text(errorMessage ?? languageManager.translate("result.videoError"))
+        }
+        .alert(saveAlertMessage, isPresented: $isShowingSaveAlert) {
+            Button(languageManager.translate("result.ok"), role: .cancel) {}
         }
     }
 
@@ -143,7 +218,7 @@ struct ResultView: View {
     private var songInfoCard: some View {
         HStack(spacing: 16) {
             // Album art placeholder or actual image
-            AsyncImage(url: URL(string: result.thumbnailUrl ?? "")) { phase in
+            AsyncImage(url: URL(string: result.thumbnailUrl ?? lastFmCoverUrl ?? "")) { phase in
                 switch phase {
                 case .success(let image):
                     image
@@ -210,10 +285,10 @@ struct ResultView: View {
         VStack(spacing: 12) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("生成海报")
+                    Text(languageManager.translate("result.generatePoster"))
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(theme.textPrimary)
-                    Text("适合朋友圈大图分享，并可直接保存到相册")
+                    Text(languageManager.translate("result.posterTip"))
                         .font(.system(size: 11))
                         .foregroundColor(theme.textSecondary.opacity(0.7))
                 }
@@ -234,11 +309,11 @@ struct ResultView: View {
             posterPreview
 
             VStack(spacing: 12) {
-                Button(action: playPreviewAction) {
+                Button(action: generateVideo) {
                     HStack(spacing: 10) {
-                        Image(systemName: isPlayingPreview ? "stop.fill" : "play.fill")
+                                Image(systemName: "film")
                             .font(.system(size: 16, weight: .semibold))
-                        Text(isPlayingPreview ? "停止试听" : "试听15秒")
+                        Text(languageManager.translate("result.generateVideo"))
                             .font(.system(size: 16, weight: .semibold))
                     }
                     .foregroundColor(Color.white)
@@ -253,10 +328,10 @@ struct ResultView: View {
                             ))
                     )
                 }
-                .disabled(previewLoading)
+                .disabled(isGeneratingVideo)
                 .overlay(
                     Group {
-                        if previewLoading {
+                        if isGeneratingVideo {
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         }
@@ -264,11 +339,11 @@ struct ResultView: View {
                 )
 
                 HStack(spacing: 12) {
-                    Button(action: sharePoster) {
+                    Button(action: shareVideo) {
                         HStack(spacing: 10) {
                             Image(systemName: "square.and.arrow.up")
                                 .font(.system(size: 15, weight: .semibold))
-                            Text("分享海报")
+                            Text(languageManager.translate("result.shareVideo"))
                                 .font(.system(size: 14, weight: .semibold))
                         }
                         .foregroundColor(Color.white)
@@ -284,11 +359,11 @@ struct ResultView: View {
                         )
                     }
 
-                    Button(action: savePosterToAlbum) {
+                    Button(action: saveVideoToAlbum) {
                         HStack(spacing: 10) {
-                            Image(systemName: "photo.on.rectangle.angled")
+                            Image(systemName: "video")
                                 .font(.system(size: 15, weight: .semibold))
-                            Text("保存到相册")
+                            Text(languageManager.translate("result.saveVideo"))
                                 .font(.system(size: 14, weight: .semibold))
                         }
                         .foregroundColor(theme.textPrimary)
@@ -300,9 +375,6 @@ struct ResultView: View {
                         )
                     }
                 }
-            }
-            .alert(saveAlertMessage, isPresented: $isShowingSaveAlert) {
-                Button("知道了", role: .cancel) {}
             }
         }
         .padding(16)
@@ -442,96 +514,283 @@ struct ResultView: View {
         return image
     }
 
-    private func sharePoster() {
+    private func shareVideo() {
         buttonFeedback()
-        guard let image = renderPosterImage() else { return }
-        copyAllPlatformLinksToClipboard()
-        shareItems = [image]
-        isShowingShareSheet = true
-    }
-
-    private func savePosterToAlbum() {
-        buttonFeedback()
-        guard let image = renderPosterImage() else { return }
-        let saver = PhotoSaver { error in
-            if let error = error {
-                saveAlertMessage = "保存失败：\(error.localizedDescription)"
-            } else {
-                saveAlertMessage = "已保存到相册"
+        createPosterVideo { result in
+            switch result {
+            case .success(let url):
+                shareItems = [url]
+                isShowingShareSheet = true
+            case .failure(let error):
+                errorMessage = "生成视频失败：\(error.localizedDescription)"
             }
-            isShowingSaveAlert = true
-            photoSaver = nil
         }
-        photoSaver = saver
-        UIImageWriteToSavedPhotosAlbum(image, saver, #selector(PhotoSaver.image(_:didFinishSavingWithError:contextInfo:)), nil)
     }
 
-    private func playPreviewAction() {
-        if isPlayingPreview {
-            stopPreview()
+    private func generateVideo() {
+        buttonFeedback()
+        createPosterVideo { result in
+            switch result {
+            case .success:
+                saveAlertMessage = "视频已生成，您可以分享或保存它。"
+                isShowingSaveAlert = true
+            case .failure(let error):
+                errorMessage = "生成视频失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func saveVideoToAlbum() {
+        buttonFeedback()
+        createPosterVideo { result in
+            switch result {
+            case .success(let url):
+                let saver = VideoSaver { error in
+                    if let error = error {
+                        saveAlertMessage = "保存失败：\(error.localizedDescription)"
+                    } else {
+                        saveAlertMessage = "已保存视频到相册"
+                    }
+                    isShowingSaveAlert = true
+                }
+                videoSaver = saver
+                UISaveVideoAtPathToSavedPhotosAlbum(url.path, saver, #selector(VideoSaver.video(_:didFinishSavingWithError:contextInfo:)), nil)
+            case .failure(let error):
+                saveAlertMessage = "保存失败：\(error.localizedDescription)"
+                isShowingSaveAlert = true
+            }
+        }
+    }
+
+    private func createPosterVideo(completion: @escaping (Result<URL, Error>) -> Void) {
+        if let existing = videoURL {
+            completion(.success(existing))
             return
         }
-        if let url = previewURL {
-            playPreview(url: url)
-        } else {
-            previewLoading = true
-            fetchPreviewURL()
+
+        guard let image = renderPosterImage() else {
+            completion(.failure(NSError(domain: "ResultView", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法渲染海报图像"])))
+            return
+        }
+
+        let currentPreviewURL = previewURL
+        isGeneratingVideo = true
+
+        Task.detached(priority: .userInitiated) { [image, currentPreviewURL] in
+            do {
+                let audioURL = try await self.getPreviewAudioURL(existingPreviewURL: currentPreviewURL)
+                if currentPreviewURL == nil {
+                    await MainActor.run {
+                        self.previewURL = audioURL
+                    }
+                }
+                let videoFile = try await self.makeVideoFile(with: image, audioURL: audioURL)
+                await MainActor.run {
+                    self.videoURL = videoFile
+                    self.isGeneratingVideo = false
+                    completion(.success(videoFile))
+                }
+            } catch {
+                await MainActor.run {
+                    self.isGeneratingVideo = false
+                    self.errorMessage = "生成视频失败：\(error.localizedDescription)"
+                    completion(.failure(error))
+                }
+            }
         }
     }
 
-    private func fetchPreviewURL() {
+    private func getPreviewAudioURL(existingPreviewURL: URL?) async throws -> URL {
+        if let url = existingPreviewURL {
+            return url
+        }
         let query = "\(result.title) \(result.artist)"
         guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
-            previewLoading = false
-            previewError = "无法构造试听请求"
-            return
+            throw NSError(domain: "ResultView", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法构造试听请求"])
         }
 
-        Task {
-            do {
-                // Try Deezer API first
-                if let deezerURL = try await searchDeezerPreview(query: encodedQuery) {
-                    previewURL = deezerURL
-                    playPreview(url: deezerURL)
-                    previewLoading = false
-                    return
-                }
+        if let deezerURL = try await searchDeezerPreview(query: encodedQuery) {
+            return deezerURL
+        }
 
-                // Fallback to Spotify if Deezer fails
-                let token = try await fetchSpotifyAccessToken()
-                guard let token = token else {
-                    previewError = "无法获取访问令牌"
-                    previewLoading = false
-                    return
-                }
+        guard let token = try await fetchSpotifyAccessToken() else {
+            throw NSError(domain: "ResultView", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法获取访问令牌"])
+        }
 
-                guard let url = URL(string: "https://api.spotify.com/v1/search?q=track:\"\(result.title)\" artist:\"\(result.artist)\"&type=track&limit=5") else {
-                    previewLoading = false
-                    previewError = "无法构造试听请求"
-                    return
-                }
+        guard let url = URL(string: "https://api.spotify.com/v1/search?q=track:\"\(result.title)\" artist:\"\(result.artist)\"&type=track&limit=5") else {
+            throw NSError(domain: "ResultView", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法构造试听请求"])
+        }
 
-                var request = URLRequest(url: url)
-                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-                request.setValue("application/json", forHTTPHeaderField: "Accept")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-                let (data, _) = try await URLSession.shared.data(for: request)
-                let searchResponse = try JSONDecoder().decode(SpotifySearchResponse.self, from: data)
-                guard let track = searchResponse.tracks.items.first,
-                      let previewString = track.preview_url,
-                      let previewLink = URL(string: previewString) else {
-                    previewError = "未找到试听源"
-                    previewLoading = false
-                    return
-                }
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let searchResponse = try JSONDecoder().decode(SpotifySearchResponse.self, from: data)
+        guard let track = searchResponse.tracks.items.first,
+              let previewString = track.preview_url,
+              let previewLink = URL(string: previewString) else {
+            throw NSError(domain: "ResultView", code: -1, userInfo: [NSLocalizedDescriptionKey: "未找到试听源"])
+        }
 
-                previewURL = previewLink
-                playPreview(url: previewLink)
-            } catch {
-                previewError = "试听加载失败：\(error.localizedDescription)"
+        previewURL = previewLink
+        return previewLink
+    }
+
+    private func makeVideoFile(with image: UIImage, audioURL: URL) async throws -> URL {
+        let size = CGSize(width: 720, height: 1280)
+        let resizedImage = resizeImage(image, targetSize: size)
+        guard let pixelBuffer = pixelBuffer(from: resizedImage, width: Int(size.width), height: Int(size.height)) else {
+            throw NSError(domain: "ResultView", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法生成像素缓冲区"])
+        }
+
+        let videoURL = FileManager.default.temporaryDirectory.appendingPathComponent("video_\(UUID().uuidString).mp4")
+        try? FileManager.default.removeItem(at: videoURL)
+
+        let writer = try AVAssetWriter(outputURL: videoURL, fileType: .mp4)
+
+        let videoSettings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: Int(size.width),
+            AVVideoHeightKey: Int(size.height)
+        ]
+        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+        videoInput.expectsMediaDataInRealTime = false
+
+        let attributes: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32ARGB),
+            kCVPixelBufferWidthKey as String: Int(size.width),
+            kCVPixelBufferHeightKey as String: Int(size.height)
+        ]
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: videoInput, sourcePixelBufferAttributes: attributes)
+
+        guard writer.canAdd(videoInput) else {
+            throw NSError(domain: "ResultView", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法添加视频输入"])
+        }
+        writer.add(videoInput)
+
+        writer.startWriting()
+        writer.startSession(atSourceTime: .zero)
+
+        let totalFrames = 450
+        for frameIndex in 0..<totalFrames {
+            let presentationTime = CMTime(value: CMTimeValue(frameIndex), timescale: 30)
+            if !adaptor.append(pixelBuffer, withPresentationTime: presentationTime) {
+                throw writer.error ?? NSError(domain: "ResultView", code: -1, userInfo: [NSLocalizedDescriptionKey: "写入视频帧失败"])
             }
-            previewLoading = false
         }
+
+        videoInput.markAsFinished()
+
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+            writer.finishWriting {
+                if let error = writer.error {
+                    continuation.resume(throwing: error)
+                } else {
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        do {
+                            let finalURL = try self.addAudioToVideo(videoURL: videoURL, audioURL: audioURL)
+                            try? FileManager.default.removeItem(at: videoURL)
+                            continuation.resume(returning: finalURL)
+                        } catch {
+                            continuation.resume(throwing: error)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func addAudioToVideo(videoURL: URL, audioURL: URL) throws -> URL {
+        let videoAsset = AVURLAsset(url: videoURL)
+        let audioAsset = AVURLAsset(url: audioURL)
+        let composition = AVMutableComposition()
+
+        guard let videoTrack = videoAsset.tracks(withMediaType: .video).first else {
+            throw NSError(domain: "ResultView", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法读取视频轨道"])
+        }
+        let compositionVideoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)
+        try compositionVideoTrack?.insertTimeRange(CMTimeRange(start: .zero, duration: videoAsset.duration), of: videoTrack, at: .zero)
+
+        guard let audioTrack = audioAsset.tracks(withMediaType: .audio).first else {
+            throw NSError(domain: "ResultView", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法读取音频轨道"])
+        }
+        let compositionAudioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+        try compositionAudioTrack?.insertTimeRange(CMTimeRange(start: .zero, duration: videoAsset.duration), of: audioTrack, at: .zero)
+
+        let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("final_\(UUID().uuidString).mp4")
+        try? FileManager.default.removeItem(at: outputURL)
+
+        guard let exportSession = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetMediumQuality) else {
+            throw NSError(domain: "ResultView", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法创建导出会话"])
+        }
+
+        exportSession.outputURL = outputURL
+        exportSession.outputFileType = .mp4
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var exportError: Error?
+
+        exportSession.exportAsynchronously {
+            if exportSession.status == .completed {
+                semaphore.signal()
+            } else if let error = exportSession.error {
+                exportError = error
+                semaphore.signal()
+            }
+        }
+
+        semaphore.wait()
+
+        if let error = exportError {
+            throw error
+        }
+
+        return outputURL
+    }
+
+    private func resizeImage(_ image: UIImage, targetSize: CGSize) -> UIImage {
+        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        return renderer.image { _ in
+            UIColor.black.setFill()
+            UIBezierPath(rect: CGRect(origin: .zero, size: targetSize)).fill()
+
+            let aspect = min(targetSize.width / image.size.width, targetSize.height / image.size.height)
+            let newSize = CGSize(width: image.size.width * aspect, height: image.size.height * aspect)
+            let x = (targetSize.width - newSize.width) / 2.0
+            let y = (targetSize.height - newSize.height) / 2.0
+            image.draw(in: CGRect(x: x, y: y, width: newSize.width, height: newSize.height))
+        }
+    }
+
+    private func pixelBuffer(from image: UIImage, width: Int, height: Int) -> CVPixelBuffer? {
+        let attrs = [
+            kCVPixelBufferCGImageCompatibilityKey as String: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true
+        ] as CFDictionary
+        var pixelBuffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, width, height,
+                                         kCVPixelFormatType_32ARGB, attrs, &pixelBuffer)
+        guard status == kCVReturnSuccess, let buffer = pixelBuffer else {
+            return nil
+        }
+
+        CVPixelBufferLockBaseAddress(buffer, [])
+        guard let context = CGContext(data: CVPixelBufferGetBaseAddress(buffer),
+                                      width: width,
+                                      height: height,
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue) else {
+            CVPixelBufferUnlockBaseAddress(buffer, [])
+            return nil
+        }
+
+        context.clear(CGRect(x: 0, y: 0, width: width, height: height))
+        context.draw(image.cgImage!, in: CGRect(x: 0, y: 0, width: width, height: height))
+        CVPixelBufferUnlockBaseAddress(buffer, [])
+        return buffer
     }
 
     private func searchDeezerPreview(query: String) async throws -> URL? {
@@ -565,22 +824,6 @@ struct ResultView: View {
         return tokenResponse.accessToken
     }
 
-    private func playPreview(url: URL) {
-        stopPreview()
-        player = AVPlayer(url: url)
-        player?.play()
-        isPlayingPreview = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
-            self.stopPreview()
-        }
-    }
-
-    private func stopPreview() {
-        player?.pause()
-        player = nil
-        isPlayingPreview = false
-    }
-
     private func copyAllPlatformLinksToClipboard() {
         var linkText = result.platforms.map { "\($0.displayName)：\($0.url)" }.joined(separator: "\n")
         linkText += "\n\nsong.link：\(result.songLinkUrl)"
@@ -588,7 +831,8 @@ struct ResultView: View {
     }
 
     private func loadCoverImage() async {
-        guard let urlString = result.thumbnailUrl,
+        let urlString = result.thumbnailUrl ?? lastFmCoverUrl
+        guard let urlString = urlString,
               let url = URL(string: urlString) else { return }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
@@ -608,7 +852,7 @@ struct ResultView: View {
             HStack(spacing: 8) {
                 Image(systemName: "link")
                     .font(.system(size: 13))
-                Text("在 song.link 查看完整页面")
+                Text(languageManager.translate("result.songLink"))
                     .font(.system(size: 13, weight: .medium))
                 Image(systemName: "arrow.up.right")
                     .font(.system(size: 11))
@@ -650,14 +894,14 @@ struct ResultView: View {
     }
 }
 
-class PhotoSaver: NSObject {
+class VideoSaver: NSObject {
     private let completion: (Error?) -> Void
 
     init(completion: @escaping (Error?) -> Void) {
         self.completion = completion
     }
 
-    @objc func image(_ image: UIImage, didFinishSavingWithError error: Error?, contextInfo: UnsafeRawPointer) {
+    @objc func video(_ videoPath: String, didFinishSavingWithError error: Error?, contextInfo: UnsafeRawPointer) {
         completion(error)
     }
 }

@@ -16,7 +16,141 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "575"
             endingLineNumber = "575"
-            landmarkName = "playPreview(url:)"
+            landmarkName = "createPosterVideo(completion:)"
+            landmarkType = "7">
+            <Locations>
+               <Location
+                  uuid = "D73F9894-F27C-4316-85E6-3F590631BA26 - b01ba99e0a6ccefe"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "&#x6211;&#x60f3;&#x8ba9;&#x4f60;&#x4e5f;&#x542c;&#x4e0a;.ResultView.createPosterVideo(completion: (Swift.Result&lt;Foundation.URL, Swift.Error&gt;) -&gt; ()) -&gt; ()"
+                  moduleName = "&#x6211;&#x60f3;&#x8ba9;&#x4f60;&#x4e5f;&#x542c;&#x4e0a;.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/tas/Desktop/%E6%88%91%E6%83%B3%E8%AE%A9%E4%BD%A0%E4%B9%9F%E5%90%AC%E4%B8%8A/%E6%88%91%E6%83%B3%E8%AE%A9%E4%BD%A0%E4%B9%9F%E5%90%AC%E4%B8%8A/ResultView.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "576"
+                  endingLineNumber = "576">
+               </Location>
+               <Location
+                  uuid = "D73F9894-F27C-4316-85E6-3F590631BA26 - b01ba99e0a6ccefe"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "&#x6211;&#x60f3;&#x8ba9;&#x4f60;&#x4e5f;&#x542c;&#x4e0a;.ResultView.createPosterVideo(completion: (Swift.Result&lt;Foundation.URL, Swift.Error&gt;) -&gt; ()) -&gt; ()"
+                  moduleName = "&#x6211;&#x60f3;&#x8ba9;&#x4f60;&#x4e5f;&#x542c;&#x4e0a;.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/tas/Desktop/%E6%88%91%E6%83%B3%E8%AE%A9%E4%BD%A0%E4%B9%9F%E5%90%AC%E4%B8%8A/%E6%88%91%E6%83%B3%E8%AE%A9%E4%BD%A0%E4%B9%9F%E5%90%AC%E4%B8%8A/ResultView.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "576"
+                  endingLineNumber = "576">
+               </Location>
+            </Locations>
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "6FC49B90-131F-4149-BD74-CDF24071BB46"
+            shouldBeEnabled = "Yes"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "&#x6211;&#x60f3;&#x8ba9;&#x4f60;&#x4e5f;&#x542c;&#x4e0a;/ResultView.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "678"
+            endingLineNumber = "678"
+            landmarkName = "makeVideoFile(with:audioURL:)"
+            landmarkType = "7">
+            <Locations>
+               <Location
+                  uuid = "6FC49B90-131F-4149-BD74-CDF24071BB46 - 2a4966983ad3d064"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(1) suspend resume partial function for &#x6211;&#x60f3;&#x8ba9;&#x4f60;&#x4e5f;&#x542c;&#x4e0a;.ResultView.makeVideoFile(with: __C.UIImage, audioURL: Foundation.URL) async throws -&gt; Foundation.URL"
+                  moduleName = "&#x6211;&#x60f3;&#x8ba9;&#x4f60;&#x4e5f;&#x542c;&#x4e0a;.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/tas/Desktop/%E6%88%91%E6%83%B3%E8%AE%A9%E4%BD%A0%E4%B9%9F%E5%90%AC%E4%B8%8A/%E6%88%91%E6%83%B3%E8%AE%A9%E4%BD%A0%E4%B9%9F%E5%90%AC%E4%B8%8A/ResultView.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "678"
+                  endingLineNumber = "678">
+               </Location>
+               <Location
+                  uuid = "6FC49B90-131F-4149-BD74-CDF24071BB46 - 2a4966983ad3d005"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(1) suspend resume partial function for &#x6211;&#x60f3;&#x8ba9;&#x4f60;&#x4e5f;&#x542c;&#x4e0a;.ResultView.makeVideoFile(with: __C.UIImage, audioURL: Foundation.URL) async throws -&gt; Foundation.URL"
+                  moduleName = "&#x6211;&#x60f3;&#x8ba9;&#x4f60;&#x4e5f;&#x542c;&#x4e0a;.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/tas/Desktop/%E6%88%91%E6%83%B3%E8%AE%A9%E4%BD%A0%E4%B9%9F%E5%90%AC%E4%B8%8A/%E6%88%91%E6%83%B3%E8%AE%A9%E4%BD%A0%E4%B9%9F%E5%90%AC%E4%B8%8A/ResultView.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "679"
+                  endingLineNumber = "679">
+               </Location>
+               <Location
+                  uuid = "6FC49B90-131F-4149-BD74-CDF24071BB46 - 2fd23b8b92d2191c"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(2) await resume partial function for &#x6211;&#x60f3;&#x8ba9;&#x4f60;&#x4e5f;&#x542c;&#x4e0a;.ResultView.makeVideoFile(with: __C.UIImage, audioURL: Foundation.URL) async throws -&gt; Foundation.URL"
+                  moduleName = "&#x6211;&#x60f3;&#x8ba9;&#x4f60;&#x4e5f;&#x542c;&#x4e0a;.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/tas/Desktop/%E6%88%91%E6%83%B3%E8%AE%A9%E4%BD%A0%E4%B9%9F%E5%90%AC%E4%B8%8A/%E6%88%91%E6%83%B3%E8%AE%A9%E4%BD%A0%E4%B9%9F%E5%90%AC%E4%B8%8A/ResultView.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "679"
+                  endingLineNumber = "679">
+               </Location>
+               <Location
+                  uuid = "6FC49B90-131F-4149-BD74-CDF24071BB46 - e474d562f8820a00"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(6) suspend resume partial function for &#x6211;&#x60f3;&#x8ba9;&#x4f60;&#x4e5f;&#x542c;&#x4e0a;.ResultView.makeVideoFile(with: __C.UIImage, audioURL: Foundation.URL) async throws -&gt; Foundation.URL"
+                  moduleName = "&#x6211;&#x60f3;&#x8ba9;&#x4f60;&#x4e5f;&#x542c;&#x4e0a;.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/tas/Desktop/%E6%88%91%E6%83%B3%E8%AE%A9%E4%BD%A0%E4%B9%9F%E5%90%AC%E4%B8%8A/%E6%88%91%E6%83%B3%E8%AE%A9%E4%BD%A0%E4%B9%9F%E5%90%AC%E4%B8%8A/ResultView.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "679"
+                  endingLineNumber = "679">
+               </Location>
+               <Location
+                  uuid = "6FC49B90-131F-4149-BD74-CDF24071BB46 - d9e0c92c75b60efd"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "closure #1 (Swift.CheckedContinuation&lt;(), Swift.Error&gt;) -&gt; () in &#x6211;&#x60f3;&#x8ba9;&#x4f60;&#x4e5f;&#x542c;&#x4e0a;.ResultView.makeVideoFile(with: __C.UIImage, audioURL: Foundation.URL) async throws -&gt; Foundation.URL"
+                  moduleName = "&#x6211;&#x60f3;&#x8ba9;&#x4f60;&#x4e5f;&#x542c;&#x4e0a;.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/tas/Desktop/%E6%88%91%E6%83%B3%E8%AE%A9%E4%BD%A0%E4%B9%9F%E5%90%AC%E4%B8%8A/%E6%88%91%E6%83%B3%E8%AE%A9%E4%BD%A0%E4%B9%9F%E5%90%AC%E4%B8%8A/ResultView.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "677"
+                  endingLineNumber = "677">
+               </Location>
+            </Locations>
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "8029AE95-C6B1-46EE-B029-A23881952F23"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "&#x6211;&#x60f3;&#x8ba9;&#x4f60;&#x4e5f;&#x542c;&#x4e0a;/ResultView.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "576"
+            endingLineNumber = "576"
+            landmarkName = "createPosterVideo(completion:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
