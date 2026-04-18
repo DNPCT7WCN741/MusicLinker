@@ -1,4 +1,4 @@
-# MusicLinker — iOS App
+# MusicLinker — iOS/iPadOS App
 
 一个 iOS 应用，输入任意音乐平台的歌曲链接，自动聚合该歌曲在其他所有主流平台的链接。
 
@@ -81,6 +81,7 @@ GET https://api.song.link/v1-alpha.1/links?url={encoded_url}&userCountry=CN
 ```
 
 ---
+## 安卓版开发中
 
 ## 使用方法
 
@@ -99,3 +100,5 @@ GET https://api.song.link/v1-alpha.1/links?url={encoded_url}&userCountry=CN
 - [ ] 收藏功能
 - [ ] 国产平台直接支持（网易云 / QQ 音乐官方 API，需申请 Key）
 - [ ] 生成15s视频
+- [ ] 对于iPadOS进行ui适配
+      
