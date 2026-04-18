@@ -1,0 +1,44 @@
+{
+  "fill" : "automatic",
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "未命名.png",
+          "name" : "未命名",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              -103,
+              -103
+            ]
+          }
+        },
+        {
+          "image-name" : "未命名3.png",
+          "name" : "未命名3",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              22.5,
+              22.5
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : [
+      "iOS"
+    ]
+  }
+}
