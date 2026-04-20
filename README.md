@@ -16,7 +16,6 @@
 | Amazon Music | ✅ |
 | SoundCloud | ✅ |
 | Pandora | ✅ |
-
 ---
 
 ## 技术架构
