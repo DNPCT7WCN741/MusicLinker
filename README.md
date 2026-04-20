@@ -80,7 +80,6 @@ GET https://api.song.link/v1-alpha.1/links?url={encoded_url}&userCountry=CN
 ```
 
 ---
-## 安卓版开发中
 
 ## 使用方法
 
@@ -100,4 +99,6 @@ GET https://api.song.link/v1-alpha.1/links?url={encoded_url}&userCountry=CN
 - [ ] 国产平台直接支持（网易云 / QQ 音乐官方 API，需申请 Key）
 - [ ] 生成15s视频
 - [ ] 对于iPadOS进行ui适配
+- [ ] 安卓版会有的
+- [ ] 运用歌名进行搜索
       
