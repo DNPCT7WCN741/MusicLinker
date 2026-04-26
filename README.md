@@ -27,6 +27,7 @@ MusicLinker 是一款 iOS 应用，让你轻松将歌曲链接在不同音乐平
 | 🎵 **Spotify** | ✅ | 完整支持，包括搜索回退 |
 | 🎵 **Apple Music** | ✅ | 完整支持，自动地区转换 |
 | ▶️ **YouTube Music** | ✅ | 完整支持，包括封面解析 |
+| ☁️ **网易云音乐** | ✅ | 搜索链接 + URL识别，支持App跳转 |
 | 🌊 **Tidal** | ✅ | 高保真音乐平台 |
 | 🎧 **Deezer** | ✅ | 欧洲流行平台 |
 | 📦 **Amazon Music** | ✅ | 亚马逊音乐服务 |
@@ -42,7 +43,7 @@ MusicLinker 是一款 iOS 应用，让你轻松将歌曲链接在不同音乐平
 - 🎨 **Audius** - 去中心化音乐平台
 - 🎤 **Spinrilla** - 嘻哈音乐平台
 
-*总计支持 **14+ 平台**，持续更新中*
+*总计支持 **15+ 平台**，持续更新中*
 
 ---
 
@@ -183,17 +184,106 @@ https://open.spotify.com/search/{歌名}%20{艺术家}
 
 // Apple Music 搜索链接  
 https://music.apple.com/search?term={歌名}%20{艺术家}
+
+// 网易云音乐搜索链接
+https://music.163.com/#/search/m/?s={歌名}%20{艺术家}
 ```
 
 用户可以点击搜索链接，在对应平台手动查找歌曲。
 
-### 3. 多实体封面解析
+### 3. 网易云音乐支持
+
+完整支持网易云音乐链接的识别和跳转：
+
+- **URL 识别**：自动识别网易云音乐链接（music.163.com、y.music.163.com）
+- **ID 提取**：智能提取歌曲 ID，构造标准链接
+- **App 跳转**：支持直接跳转到网易云音乐 App（使用 orpheus:// URL Scheme）
+
+#### 🆕 网易云音乐 API 增强（可选）
+
+**默认模式（推荐）：**
+- 使用搜索链接，无需配置
+- 稳定可靠，用户体验好
+- 支持直接跳转到网易云 App
+
+**API 模式（高级功能）：**
+
+如果你需要获取精确的歌曲链接而非搜索链接，可以配置网易云音乐 API：
+
+1. **部署 API 服务**
+   
+   使用 [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi) 项目：
+   
+   ```bash
+   # 本地部署
+   git clone https://github.com/Binaryify/NeteaseCloudMusicApi.git
+   cd NeteaseCloudMusicApi
+   npm install
+   node app.js
+   
+   # 或使用 Vercel 一键部署（推荐）
+   # 访问项目主页，点击 "Deploy to Vercel"
+   ```
+
+2. **在 App 中配置**
+   
+   - 打开 MusicLinker App
+   - 点击右上角 ⚙️ 设置按钮
+   - 输入你的 API 地址（例如：`https://your-api.vercel.app`）
+   - 保存设置
+
+3. **工作原理**
+   
+   启用 API 后，App 会尝试调用 API 获取精确链接：
+   - ✅ API 成功：显示精确的歌曲链接
+   - ⚠️ API 失败：自动回退到搜索链接
+   - ⏱️ 5 秒超时保护，不影响用户体验
+
+**API 端点说明：**
+
+```
+GET /cloudsearch?keywords={歌名 艺术家}&type=1&limit=1
+
+响应格式：
+{
+  "code": 200,
+  "result": {
+    "songs": [{
+      "id": 123456,
+      "name": "歌名",
+      "artists": [{"name": "艺术家"}],
+      "album": {"picUrl": "封面URL"}
+    }]
+  }
+}
+```
+
+**注意事项：**
+- API 服务需要自行部署或使用可靠的公开服务
+- 建议使用 Vercel 等平台部署，免费且稳定
+- 如果没有 API 需求，保持默认配置即可
+
+### 4. 多实体封面解析
 
 智能从 API 返回的多个实体中查找封面图片，确保 YouTube Music 等平台也能正确显示封面。
 
-### 4. 平台去重
+### 5. 平台去重
 
 自动处理 API 返回的重复平台（如 `appleMusic` 和 `itunes`），避免显示重复条目。
+
+### 6. 自定义主题
+
+提供 7 种精美主题供选择：
+
+- 🌙 **深色**（默认）- 优雅的深色调，因为主创是是深色模式爱好者，所以默认是深色
+- ☀️ **浅色** - 明亮清爽
+- ⚫️ **纯黑** - OLED 友好
+- 💜 **紫色** - 神秘优雅
+- 💚 **绿色** - 清新自然  
+- 🧡 **橙色** - 活力四射
+- 💗 **粉色** - 浪漫温柔
+
+切换方式：点击右上角调色板图标 🎨
 
 ---
 
@@ -262,12 +352,17 @@ A: 在 `OdesliService.swift` 的 `getPlatformInfo()` 方法中添加新平台的
 
 ### 已完成 ✅
 
-- [x] 14+ 平台支持
+- [x] 15+ 平台支持（包括网易云音乐）
 - [x] 智能备用链接
 - [x] 地区自动转换
 - [x] YouTube Music 封面解析
 - [x] 平台去重
 - [x] 详细错误处理
+- [x] 网易云音乐 URL 识别与 App 跳转
+- [x] 7种精美主题（含纯黑省电模式）
+- [x] 历史记录功能
+- [x] 快速分享功能
+- [x] 一键复制所有链接
 
 ### 计划中 🚧
 
@@ -305,3 +400,4 @@ MIT License - 详见 LICENSE 文件
 ---
 
 <p align="center">Made with ❤️ and SwiftUI</p>
+- [ ] 国产平台直接支持（网易云 / QQ 音乐/酷狗音乐官方 API，需申请 Key）
