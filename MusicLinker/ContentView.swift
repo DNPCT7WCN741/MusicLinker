@@ -49,6 +49,8 @@ struct ContentView: View {
     @State private var selectedHistoryItem: SearchHistoryItem?
     @State private var historyLoaded = false
     @State private var isShowingLanguageMenu = false
+    @State private var isShowingAPISettings = false
+    @State private var neteaseAPIURL = ""
 
     var body: some View {
         NavigationStack {
@@ -110,6 +112,7 @@ struct ContentView: View {
         }
         .preferredColorScheme(theme.preferredColorScheme)
         .onAppear {
+            loadThemePreference()
             loadHistoryFromStorage()
         }
     }
@@ -118,7 +121,7 @@ struct ContentView: View {
         VStack(spacing: 6) {
             HStack(spacing: 10) {
                 Text("MusicLinker")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
                     .foregroundStyle(
                         LinearGradient(
                             colors: [theme.textPrimary, theme.accent],
@@ -139,20 +142,17 @@ struct ContentView: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(item.displayText)
                                         .font(.system(size: 14, weight: .medium))
-                                        .foregroundColor(.primary)
                                         .lineLimit(1)
                                     Text(item.timestamp, style: .date)
                                         .font(.system(size: 12))
-                                        .foregroundColor(.secondary)
                                 }
                             }
                         }
                         
                         if searchHistory.count > 10 {
                             Divider()
-                            Button(action: clearSearchHistory) {
-                                Text(languageManager.translate("history.clear"))
-                                    .foregroundColor(.red)
+                            Button(role: .destructive, action: clearSearchHistory) {
+                                Label(languageManager.translate("history.clear"), systemImage: "trash")
                             }
                         }
                     }
@@ -166,12 +166,14 @@ struct ContentView: View {
                                 .fill(theme.surfaceAlt)
                         )
                 }
+                .id("historyMenu-\(searchHistory.count)")
                 
                 Menu {
                     ForEach(AppLanguage.allCases, id: \.self) { language in
                         Button(action: { languageManager.setLanguage(language) }) {
                             HStack {
                                 Text(language.displayName)
+                                Spacer()
                                 if languageManager.currentLanguage == language {
                                     Image(systemName: "checkmark")
                                 }
@@ -188,9 +190,40 @@ struct ContentView: View {
                                 .fill(theme.surfaceAlt)
                         )
                 }
+                .id("languageMenu")
 
-                Button(action: toggleTheme) {
-                    Image(systemName: theme == .dark ? "sun.max.fill" : "moon.fill")
+                Menu {
+                    ForEach(AppTheme.allCases, id: \.self) { themeOption in
+                        Button(action: { selectTheme(themeOption) }) {
+                            HStack {
+                                Image(systemName: themeOption.icon)
+                                Text(themeOption.displayName)
+                                Spacer()
+                                if theme == themeOption {
+                                    Image(systemName: "checkmark")
+                                        .foregroundColor(themeOption.accent)
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: theme.icon)
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 38, height: 38)
+                        .foregroundColor(theme.textPrimary)
+                        .background(
+                            Circle()
+                                .fill(theme.surfaceAlt)
+                        )
+                }
+                .id("themeMenu")
+                
+                // API 设置按钮
+                Button(action: {
+                    neteaseAPIURL = service.getNeteaseAPIBaseURL()
+                    isShowingAPISettings = true
+                }) {
+                    Image(systemName: "gearshape.fill")
                         .font(.system(size: 18, weight: .semibold))
                         .frame(width: 38, height: 38)
                         .foregroundColor(theme.textPrimary)
@@ -203,6 +236,10 @@ struct ContentView: View {
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 24)
+        .sheet(isPresented: $isShowingAPISettings) {
+            APISettingsSheet(neteaseAPIURL: $neteaseAPIURL, isPresented: $isShowingAPISettings, service: service)
+                .presentationDetents([.medium])
+        }
     }
 
     private var searchCard: some View {
@@ -218,7 +255,7 @@ struct ContentView: View {
             }
 
             HStack(spacing: 12) {
-                TextField("", text: $inputURL, prompt: Text("支持 Spotify / Apple Music / YouTubeMusic…")
+                TextField("", text: $inputURL, prompt: Text(languageManager.translate("search.placeholder"))
                     .foregroundColor(theme.textSecondary.opacity(0.6))
                     .font(.system(size: 14))
                 )
@@ -414,9 +451,23 @@ struct ContentView: View {
         }
     }
 
-    private func toggleTheme() {
+    private func selectTheme(_ newTheme: AppTheme) {
         buttonFeedback()
-        theme = theme == .dark ? .light : .dark
+        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+            theme = newTheme
+        }
+        saveThemePreference(newTheme)
+    }
+    
+    private func saveThemePreference(_ theme: AppTheme) {
+        UserDefaults.standard.set(theme.rawValue, forKey: "selectedTheme")
+    }
+    
+    private func loadThemePreference() {
+        if let savedTheme = UserDefaults.standard.string(forKey: "selectedTheme"),
+           let theme = AppTheme(rawValue: savedTheme) {
+            self.theme = theme
+        }
     }
 
     private func buttonFeedback() {
@@ -472,11 +523,51 @@ struct ContentView: View {
         (name: "Spotify", color: "#1DB954"),
         (name: "Apple Music", color: "#FC3C44"),
         (name: "YouTube Music", color: "#FF0000"),
+        (name: "网易云音乐", color: "#E60026"),
+        (name: "QQ 音乐", color: "#31C27C"),
         (name: "Tidal", color: "#7B68EE"),
         (name: "Deezer", color: "#A238FF"),
         (name: "Amazon Music", color: "#00A8E1"),
         (name: "SoundCloud", color: "#FF5500"),
         (name: "Pandora", color: "#3668FF"),
     ]
+}
+
+// MARK: - API Settings Sheet
+struct APISettingsSheet: View {
+    @Binding var neteaseAPIURL: String
+    @Binding var isPresented: Bool
+    let service: OdesliService
+    @EnvironmentObject var languageManager: LanguageManager
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("https://your-api.com", text: $neteaseAPIURL)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                } header: {
+                    Text("网易云音乐 API 地址")
+                } footer: {
+                    Text("可选功能。留空则使用搜索链接（默认，推荐）。\n填入地址后可获取精确歌曲链接。\n\n当前状态：\(service.isNeteaseAPIEnabled ? "已启用 API 模式" : "使用搜索链接")")
+                }
+            }
+            .navigationTitle("API 设置")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { isPresented = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") {
+                        service.setNeteaseAPIBaseURL(neteaseAPIURL)
+                        isPresented = false
+                    }
+                }
+            }
+        }
+    }
 }
 

@@ -31,6 +31,40 @@ struct PlatformLinks: Codable {
     let entityUniqueId: String
 }
 
+// MARK: - NetEase API Response Models
+
+struct NeteaseSearchResponse: Codable {
+    let code: Int
+    let result: NeteaseSearchResult?
+}
+
+struct NeteaseSearchResult: Codable {
+    let songs: [NeteaseSong]?
+    let songCount: Int?
+}
+
+struct NeteaseSong: Codable {
+    let id: Int
+    let name: String
+    let artists: [NeteaseArtist]
+    let album: NeteaseAlbum
+    
+    enum CodingKeys: String, CodingKey {
+        case id, name, artists, album
+    }
+}
+
+struct NeteaseArtist: Codable {
+    let id: Int
+    let name: String
+}
+
+struct NeteaseAlbum: Codable {
+    let id: Int
+    let name: String
+    let picUrl: String?
+}
+
 // MARK: - Platform Info
 
 enum MusicPlatform: String, CaseIterable {
@@ -122,11 +156,63 @@ class OdesliService: ObservableObject {
     @Published var isLoading = false
     @Published var result: SongResult?
     @Published var errorMessage: String?
+    private var isFetching = false
 
     private let baseURL = "https://api.song.link/v1-alpha.1/links"
     private let songwhipURL = "https://songwhip.com/"
+    
+    // 网易云音乐 API 地址（用户可配置，默认为空表示不使用API）
+    private var neteaseAPIBaseURL: String {
+        UserDefaults.standard.string(forKey: "neteaseAPIBaseURL") ?? ""
+    }
+    
+    // 是否启用网易云音乐 API
+    var isNeteaseAPIEnabled: Bool {
+        !neteaseAPIBaseURL.isEmpty && neteaseAPIBaseURL != "none"
+    }
+    
+    // 设置网易云音乐 API 地址
+    func setNeteaseAPIBaseURL(_ url: String) {
+        UserDefaults.standard.set(url, forKey: "neteaseAPIBaseURL")
+    }
+    
+    // 获取当前配置的网易云音乐 API 地址
+    func getNeteaseAPIBaseURL() -> String {
+        return neteaseAPIBaseURL
+    }
 
     func fetchLinks(url: String) async {
+        guard !isFetching else { return }
+        isFetching = true
+        defer { isFetching = false }
+        
+        // 网易云手机短链 163cn.tv → 跟随重定向
+        if url.contains("163cn.tv") {
+            await MainActor.run { self.isLoading = true; self.errorMessage = nil; self.result = nil }
+            print("🔄 检测到网易云手机短链，解析重定向...")
+            if let resolved = await resolveURL(url), resolved.contains("music.163.com") {
+                await fetchLinksFromNetease(neteaseURL: resolved)
+            } else {
+                await MainActor.run {
+                    self.errorMessage = "无法解析短链，请使用完整链接"
+                    self.isLoading = false
+                }
+            }
+            return
+        }
+
+        // 检测到网易云音乐链接，走特殊流程
+        if url.contains("music.163.com") || url.contains("y.music.163.com") {
+            await fetchLinksFromNetease(neteaseURL: url)
+            return
+        }
+        
+        // 检测到 QQ 音乐链接，走特殊流程
+        if url.contains("y.qq.com") {
+            await fetchLinksFromQQMusic(qqURL: url)
+            return
+        }
+        
         // 将中国区链接转换为美国区链接（提高跨平台映射成功率）
         var processedURL = url
         if url.contains("music.apple.com/cn") {
@@ -224,6 +310,412 @@ class OdesliService: ObservableObject {
         }
     }
 
+    // MARK: - QQ 音乐链接特殊处理
+    // 流程：QQ音乐链接 → 提取 songmid → 调用官方接口获取歌曲信息 → iTunes 搜索 → Odesli 全平台
+    private func fetchLinksFromQQMusic(qqURL: String) async {
+        await MainActor.run {
+            self.isLoading = true
+            self.errorMessage = nil
+            self.result = nil
+        }
+        
+        print("🎵 检测到 QQ 音乐链接，启动专用流程...")
+        
+        // Step 1: 提取 songmid（如果直接失败，尝试跟随短链重定向）
+        var effectiveURL = qqURL
+        var extractedMid = extractQQSongMid(from: qqURL)
+        if extractedMid == nil {
+            print("🔄 直接提取 songmid 失败，尝试解析短链重定向...")
+            if let resolved = await resolveURL(qqURL) {
+                effectiveURL = resolved
+                extractedMid = extractQQSongMid(from: resolved)
+            }
+        }
+        guard let songmid = extractedMid else {
+            await MainActor.run {
+                self.errorMessage = "无法解析 QQ 音乐链接中的歌曲 ID"
+                self.isLoading = false
+            }
+            return
+        }
+        let _ = effectiveURL  // 已提取 songmid，effectiveURL 仅供调试
+        
+        print("🔍 提取到 QQ 音乐 songmid: \(songmid)")
+        
+        // Step 2: 调用 QQ 音乐官方接口获取歌曲信息
+        guard let songInfo = await fetchQQSongDetail(songmid: songmid) else {
+            await MainActor.run {
+                self.errorMessage = "无法获取歌曲信息，请检查网络连接"
+                self.isLoading = false
+            }
+            return
+        }
+        
+        let title = songInfo.title
+        let artist = songInfo.artist
+        let thumbnailUrl = songInfo.thumbnailUrl
+        print("✅ 获取到歌曲信息: \(title) - \(artist)")
+        
+        // Step 3: iTunes 搜索获得 Apple Music 链接
+        if let appleMusicURL = await searchITunes(title: title, artist: artist) {
+            print("🎵 iTunes 找到链接，传给 Odesli...")
+            
+            // Step 4: 把 Apple Music 链接传给 Odesli 获取全平台结果
+            if let encodedAM = appleMusicURL.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+               let requestURL = URL(string: "\(baseURL)?url=\(encodedAM)&userCountry=US&songIfSingle=true"),
+               let (data, response) = try? await URLSession.shared.data(from: requestURL),
+               let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
+               let odesliResponse = try? JSONDecoder().decode(OdesliResponse.self, from: data) {
+                
+                let songResult = parseSongResult(from: odesliResponse)
+                
+                // 插入精确的 QQ 音乐链接
+                let qqLink = AppPlatformLink(
+                    platformKey: "qqmusic",
+                    displayName: "QQ 音乐",
+                    iconName: "qqmusic.icon",
+                    accentColor: "#31C27C",
+                    url: "https://y.qq.com/n/ryqq/songDetail/\(songmid)",
+                    nativeUrl: "qqmusic://playSong?songmid=\(songmid)"
+                )
+                var platforms = songResult.platforms.filter { $0.displayName != "QQ 音乐" }
+                platforms.append(qqLink)
+                platforms.sort {
+                    let p1 = getPlatformInfo(for: $0.platformKey)?.priority ?? 999
+                    let p2 = getPlatformInfo(for: $1.platformKey)?.priority ?? 999
+                    return p1 < p2
+                }
+                
+                await MainActor.run {
+                    self.result = SongResult(
+                        title: songResult.title.isEmpty ? title : songResult.title,
+                        artist: songResult.artist.isEmpty ? artist : songResult.artist,
+                        album: songResult.album,
+                        releaseYear: songResult.releaseYear,
+                        thumbnailUrl: songResult.thumbnailUrl ?? thumbnailUrl,
+                        songLinkUrl: songResult.songLinkUrl,
+                        platforms: platforms
+                    )
+                    self.isLoading = false
+                }
+                return
+            }
+        }
+        
+        // 回退：显示基本结果（有正确歌曲信息 + QQ 音乐链接）
+        let qqLink = AppPlatformLink(
+            platformKey: "qqmusic",
+            displayName: "QQ 音乐",
+            iconName: "qqmusic.icon",
+            accentColor: "#31C27C",
+            url: "https://y.qq.com/n/ryqq/songDetail/\(songmid)",
+            nativeUrl: "qqmusic://playSong?songmid=\(songmid)"
+        )
+        var platforms = [qqLink]
+        if let spotifyLink = constructSpotifySearchLink(title: title, artist: artist) { platforms.append(spotifyLink) }
+        if let amLink = constructAppleMusicSearchLink(title: title, artist: artist) { platforms.append(amLink) }
+        
+        await MainActor.run {
+            self.result = SongResult(
+                title: title, artist: artist, album: nil, releaseYear: nil,
+                thumbnailUrl: thumbnailUrl, songLinkUrl: qqURL, platforms: platforms
+            )
+            self.isLoading = false
+        }
+    }
+    
+    // 从 QQ 音乐 URL 提取 songmid
+    private func extractQQSongMid(from url: String) -> String? {
+        // 格式：y.qq.com/n/ryqq/songDetail/SONGMID
+        if let range = url.range(of: "songDetail/") {
+            let after = url[range.upperBound...]
+            let mid = after.components(separatedBy: CharacterSet(charactersIn: "?#&/ ")).first ?? ""
+            return mid.isEmpty ? nil : mid
+        }
+        // 格式：y.qq.com/n/ryqq/song?songmid=SONGMID
+        if let range = url.range(of: "songmid=") {
+            let after = url[range.upperBound...]
+            let mid = after.components(separatedBy: CharacterSet(charactersIn: "?#&/ ")).first ?? ""
+            return mid.isEmpty ? nil : mid
+        }
+        return nil
+    }
+    
+    // 调用 QQ 音乐官方接口获取歌曲信息
+    private func fetchQQSongDetail(songmid: String) async -> (title: String, artist: String, thumbnailUrl: String?)? {
+        guard let url = URL(string: "https://c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg?songmid=\(songmid)&format=json") else { return nil }
+        
+        print("📡 调用 QQ 音乐官方接口...")
+        
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 8.0
+            request.setValue("https://y.qq.com", forHTTPHeaderField: "Referer")
+            request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
+            
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return nil }
+            
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let dataArr = json["data"] as? [[String: Any]],
+               let song = dataArr.first {
+                
+                let songName = song["name"] as? String ?? ""
+                let singers = song["singer"] as? [[String: Any]] ?? []
+                let artistName = singers.compactMap { $0["name"] as? String }.joined(separator: ", ")
+                
+                // 封面：y.gtimg.cn/music/photo_new/T002R500x500M000{pmid}.jpg
+                var picUrl: String? = nil
+                if let album = song["album"] as? [String: Any],
+                   let pmid = album["pmid"] as? String, !pmid.isEmpty {
+                    picUrl = "https://y.gtimg.cn/music/photo_new/T002R500x500M000\(pmid).jpg"
+                }
+                
+                if !songName.isEmpty {
+                    print("✅ QQ 官方接口获取: \(songName) - \(artistName)")
+                    return (songName, artistName, picUrl)
+                }
+            }
+        } catch {
+            print("⚠️ QQ 音乐官方接口失败: \(error.localizedDescription)")
+        }
+        return nil
+    }
+
+    // MARK: - 网易云音乐链接特殊处理
+    // 流程：网易云链接 → 调用网易云API获取歌曲信息 → 用歌曲信息搜索Odesli获取其他平台链接
+    private func fetchLinksFromNetease(neteaseURL: String) async {
+        await MainActor.run {
+            self.isLoading = true
+            self.errorMessage = nil
+            self.result = nil
+        }
+        
+        print("🎵 检测到网易云音乐链接，启动专用流程...")
+        
+        // Step 1: 提取歌曲ID
+        guard let songId = extractNeteaseSongId(from: neteaseURL) else {
+            await MainActor.run {
+                self.errorMessage = "无法解析网易云音乐链接中的歌曲 ID"
+                self.isLoading = false
+            }
+            return
+        }
+        
+        print("🔍 提取到网易云歌曲 ID: \(songId)")
+        
+        // Step 2: 调用网易云官方接口获取歌曲信息（无需第三方API）
+        guard let songInfo = await fetchNeteaseSOngDetail(songId: songId) else {
+            await MainActor.run {
+                self.errorMessage = "无法获取歌曲信息，请检查网络连接"
+                self.isLoading = false
+            }
+            return
+        }
+        
+        let title = songInfo.title
+        let artist = songInfo.artist
+        let thumbnailUrl = songInfo.thumbnailUrl
+        print("✅ 获取到歌曲信息: \(title) - \(artist)")
+        
+        // Step 3: 用歌名+艺术家搜索 iTunes，获得 Apple Music 链接
+        if let appleMusicURL = await searchITunes(title: title, artist: artist) {
+            print("🎵 iTunes 找到链接: \(appleMusicURL)，传给 Odesli...")
+            
+            // Step 4: 把 Apple Music 链接传给 Odesli 获取全平台结果
+            if let encodedAM = appleMusicURL.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+               let requestURL = URL(string: "\(baseURL)?url=\(encodedAM)&userCountry=US&songIfSingle=true"),
+               let (data, response) = try? await URLSession.shared.data(from: requestURL),
+               let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
+               let odesliResponse = try? JSONDecoder().decode(OdesliResponse.self, from: data) {
+                
+                var songResult = parseSongResult(from: odesliResponse)
+                
+                // 插入精确的网易云链接
+                let neteaseLink = AppPlatformLink(
+                    platformKey: "netease",
+                    displayName: "网易云音乐",
+                    iconName: "netease.icon",
+                    accentColor: "#E60026",
+                    url: "https://music.163.com/#/song?id=\(songId)",
+                    nativeUrl: "orpheus://song/\(songId)"
+                )
+                var platforms = songResult.platforms.filter { $0.displayName != "网易云音乐" }
+                platforms.append(neteaseLink)
+                platforms.sort {
+                    let p1 = getPlatformInfo(for: $0.platformKey)?.priority ?? 999
+                    let p2 = getPlatformInfo(for: $1.platformKey)?.priority ?? 999
+                    return p1 < p2
+                }
+                
+                await MainActor.run {
+                    self.result = SongResult(
+                        title: songResult.title.isEmpty ? title : songResult.title,
+                        artist: songResult.artist.isEmpty ? artist : songResult.artist,
+                        album: songResult.album,
+                        releaseYear: songResult.releaseYear,
+                        thumbnailUrl: songResult.thumbnailUrl ?? thumbnailUrl,
+                        songLinkUrl: songResult.songLinkUrl,
+                        platforms: platforms
+                    )
+                    self.isLoading = false
+                }
+                return
+            }
+        }
+        
+        // Step 5: Odesli 也失败了，展示基本结果（有正确歌曲信息）
+        await buildNeteaseOnlyResult(songId: songId, title: title, artist: artist, thumbnailUrl: thumbnailUrl, neteaseURL: neteaseURL)
+    }
+    
+    // iTunes 搜索获取 Apple Music 链接（免费，无需 API Key）
+    private func searchITunes(title: String, artist: String) async -> String? {
+        let query = "\(title) \(artist)"
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://itunes.apple.com/search?term=\(encoded)&media=music&limit=1") else {
+            return nil
+        }
+        
+        print("🔍 iTunes 搜索: \(query)")
+        
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 8.0
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return nil }
+            
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let results = json["results"] as? [[String: Any]],
+               let first = results.first,
+               let trackViewUrl = first["trackViewUrl"] as? String {
+                // 去掉 uo= 参数，保留核心链接
+                let cleanURL = trackViewUrl.components(separatedBy: "&uo=").first ?? trackViewUrl
+                print("✅ iTunes 找到: \(cleanURL)")
+                return cleanURL
+            }
+        } catch {
+            print("⚠️ iTunes 搜索失败: \(error.localizedDescription)")
+        }
+        return nil
+    }
+    
+    // 获取网易云歌曲详情（使用官方网页接口，无需第三方API）
+    private func fetchNeteaseSOngDetail(songId: String) async -> (title: String, artist: String, thumbnailUrl: String?)? {
+        // 首先尝试官方接口
+        if let result = await queryNeteaseOfficial(songId: songId) {
+            return result
+        }
+        
+        // 如果用户配置了自定义API，也尝试一下
+        if isNeteaseAPIEnabled {
+            if let result = await querySongDetail(from: neteaseAPIBaseURL, songId: songId) {
+                return result
+            }
+        }
+        
+        return nil
+    }
+    
+    // 调用网易云官方网页接口
+    private func queryNeteaseOfficial(songId: String) async -> (title: String, artist: String, thumbnailUrl: String?)? {
+        guard let url = URL(string: "https://music.163.com/api/song/detail?ids=%5B\(songId)%5D") else { return nil }
+        
+        print("📡 调用网易云官方接口...")
+        
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 8.0
+            request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
+            request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
+            
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return nil }
+            
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let songs = json["songs"] as? [[String: Any]],
+               let song = songs.first {
+                
+                let songName = song["name"] as? String ?? ""
+                var artistName = ""
+                if let artists = song["artists"] as? [[String: Any]] {
+                    artistName = artists.compactMap { $0["name"] as? String }.joined(separator: ", ")
+                }
+                var picUrl: String? = nil
+                if let album = song["album"] as? [String: Any] {
+                    picUrl = album["picUrl"] as? String
+                }
+                
+                if !songName.isEmpty {
+                    print("✅ 官方接口获取: \(songName) - \(artistName)")
+                    return (songName, artistName, picUrl)
+                }
+            }
+        } catch {
+            print("⚠️ 官方接口失败: \(error.localizedDescription)")
+        }
+        return nil
+    }
+    
+    // 调用用户自定义 API（与网易云API Enhanced格式兼容）
+    private func querySongDetail(from host: String, songId: String) async -> (title: String, artist: String, thumbnailUrl: String?)? {
+        guard let url = URL(string: "\(host)/song/detail?ids=\(songId)") else { return nil }
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 6.0
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return nil }
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let songs = json["songs"] as? [[String: Any]], let song = songs.first {
+                let songName = song["name"] as? String ?? ""
+                var artistName = ""
+                if let ar = song["ar"] as? [[String: Any]] {
+                    artistName = ar.compactMap { $0["name"] as? String }.joined(separator: ", ")
+                } else if let artists = song["artists"] as? [[String: Any]] {
+                    artistName = artists.compactMap { $0["name"] as? String }.joined(separator: ", ")
+                }
+                var picUrl: String? = nil
+                if let al = song["al"] as? [String: Any] { picUrl = al["picUrl"] as? String }
+                else if let album = song["album"] as? [String: Any] { picUrl = album["picUrl"] as? String }
+                if !songName.isEmpty { return (songName, artistName, picUrl) }
+            }
+        } catch { }
+        return nil
+    }
+
+    private func buildNeteaseOnlyResult(songId: String, title: String, artist: String, thumbnailUrl: String?, neteaseURL: String) async {
+        var platforms: [AppPlatformLink] = [
+            AppPlatformLink(
+                platformKey: "netease",
+                displayName: "网易云音乐",
+                iconName: "netease.icon",
+                accentColor: "#E60026",
+                url: "https://music.163.com/#/song?id=\(songId)",
+                nativeUrl: "orpheus://song/\(songId)"
+            )
+        ]
+        
+        // 附加搜索链接作为备选
+        if let spotifyLink = constructSpotifySearchLink(title: title, artist: artist) {
+            platforms.append(spotifyLink)
+        }
+        if let appleMusicLink = constructAppleMusicSearchLink(title: title, artist: artist) {
+            platforms.append(appleMusicLink)
+        }
+        
+        await MainActor.run {
+            self.result = SongResult(
+                title: title,
+                artist: artist,
+                album: nil,
+                releaseYear: nil,
+                thumbnailUrl: thumbnailUrl,
+                songLinkUrl: neteaseURL,
+                platforms: platforms
+            )
+            self.isLoading = false
+        }
+    }
+
     private func getPlatformInfo(for key: String) -> (displayName: String, icon: String, color: String, priority: Int)? {
         let normalizedKey = key.lowercased()
         
@@ -234,28 +726,32 @@ class OdesliService: ObservableObject {
             return ("Apple Music", "applemusic.icon", "#FC3C44", 2)
         case "youtube", "youtubemusic":
             return ("YouTube Music", "youtubemusic.icon", "#FF0000", 3)
+        case "netease", "neteasemusic", "cloudmusic":
+            return ("网易云音乐", "netease.icon", "#E60026", 4)
+        case "qqmusic", "qq", "tencentmusic":
+            return ("QQ 音乐", "qqmusic.icon", "#31C27C", 5)
         case "tidal":
-            return ("Tidal", "tidal.icon", "#000000", 4)
+            return ("Tidal", "tidal.icon", "#000000", 6)
         case "deezer":
-            return ("Deezer", "deezer.icon", "#A238FF", 5)
+            return ("Deezer", "deezer.icon", "#A238FF", 7)
         case "amazon", "amazonmusic", "amazonstore":
-            return ("Amazon Music", "amazonmusic.icon", "#00A8E1", 6)
+            return ("Amazon Music", "amazonmusic.icon", "#00A8E1", 8)
         case "pandora":
-            return ("Pandora", "pandora.icon", "#3668FF", 7)
+            return ("Pandora", "pandora.icon", "#3668FF", 9)
         case "soundcloud":
-            return ("SoundCloud", "soundcloud.icon", "#FF5500", 8)
+            return ("SoundCloud", "soundcloud.icon", "#FF5500", 10)
         case "napster":
-            return ("Napster", "napster.icon", "#0D0D0D", 9)
+            return ("Napster", "napster.icon", "#0D0D0D", 10)
         case "yandex", "yandexmusic":
-            return ("Yandex Music", "yandex.icon", "#FFCC00", 10)
+            return ("Yandex Music", "yandex.icon", "#FFCC00", 11)
         case "anghami":
-            return ("Anghami", "anghami.icon", "#A020F0", 11)
+            return ("Anghami", "anghami.icon", "#A020F0", 12)
         case "boomplay":
-            return ("Boomplay", "boomplay.icon", "#FF6B35", 12)
+            return ("Boomplay", "boomplay.icon", "#FF6B35", 13)
         case "audius":
-            return ("Audius", "audius.icon", "#CC0FE0", 13)
+            return ("Audius", "audius.icon", "#CC0FE0", 14)
         case "spinrilla":
-            return ("Spinrilla", "spinrilla.icon", "#00D1FF", 14)
+            return ("Spinrilla", "spinrilla.icon", "#00D1FF", 15)
         default:
             return nil
         }
@@ -375,9 +871,20 @@ class OdesliService: ObservableObject {
             }
         }
         
-        // 方案3: 尝试 Songwhip API（作为最后的尝试）
+        // 方案3: 尝试 Songwhip API（如果前面的方案都没有结果）
         if backupLinks.isEmpty {
-            return try await fetchFromSongwhip(url: url)
+            if let songwhipLinks = try await fetchFromSongwhip(url: url) {
+                backupLinks.append(contentsOf: songwhipLinks)
+            }
+        }
+        
+        // 方案4: 尝试网易云音乐 API，如果失败则使用搜索链接
+        if let neteaseAPILink = await searchNeteaseAPI(title: title, artist: artist) {
+            backupLinks.append(neteaseAPILink)
+            print("✅ 使用网易云 API 获取精确链接")
+        } else if let neteaseSearchLink = constructNeteaseSearchLink(title: title, artist: artist) {
+            backupLinks.append(neteaseSearchLink)
+            print("✅ 回退到网易云音乐搜索链接")
         }
         
         return backupLinks.isEmpty ? nil : backupLinks
@@ -412,6 +919,82 @@ class OdesliService: ObservableObject {
             url: searchURL,
             nativeUrl: nil
         )
+    }
+    
+    // 构造网易云音乐搜索链接
+    private func constructNeteaseSearchLink(title: String, artist: String) -> AppPlatformLink? {
+        let query = "\(title) \(artist)".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        // 网易云音乐搜索 URL 格式
+        let searchURL = "https://music.163.com/#/search/m/?s=\(query)"
+        
+        return AppPlatformLink(
+            platformKey: "netease",
+            displayName: "网易云音乐",
+            iconName: "netease.icon",
+            accentColor: "#E60026",
+            url: searchURL,
+            nativeUrl: "orpheuswidget://search?keyword=\(query)"  // 网易云音乐 App URL Scheme
+        )
+    }
+    
+    // MARK: - 网易云音乐 API 调用
+    
+    // 通过网易云音乐 API 搜索歌曲
+    private func searchNeteaseAPI(title: String, artist: String) async -> AppPlatformLink? {
+        // 如果未启用 API，直接返回 nil
+        guard isNeteaseAPIEnabled else {
+            print("ℹ️ 网易云 API 未启用，将使用搜索链接")
+            return nil
+        }
+        
+        let keywords = "\(title) \(artist)"
+        guard let encodedKeywords = keywords.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let requestURL = URL(string: "\(neteaseAPIBaseURL)/cloudsearch?keywords=\(encodedKeywords)&type=1&limit=1") else {
+            print("❌ 网易云 API URL 构造失败")
+            return nil
+        }
+        
+        print("🌐 正在调用网易云 API: \(requestURL.absoluteString)")
+        
+        do {
+            var request = URLRequest(url: requestURL)
+            request.timeoutInterval = 5.0  // 5秒超时，避免等待太久
+            
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                print("❌ 网易云 API HTTP 错误")
+                return nil
+            }
+            
+            let searchResponse = try JSONDecoder().decode(NeteaseSearchResponse.self, from: data)
+            
+            guard searchResponse.code == 200,
+                  let songs = searchResponse.result?.songs,
+                  let firstSong = songs.first else {
+                print("⚠️ 网易云 API 未返回结果")
+                return nil
+            }
+            
+            let songId = firstSong.id
+            let neteaseURL = "https://music.163.com/#/song?id=\(songId)"
+            let nativeURL = "orpheus://song/\(songId)"
+            
+            print("✅ 网易云 API 找到歌曲: \(firstSong.name) (ID: \(songId))")
+            
+            return AppPlatformLink(
+                platformKey: "netease",
+                displayName: "网易云音乐",
+                iconName: "netease.icon",
+                accentColor: "#E60026",
+                url: neteaseURL,
+                nativeUrl: nativeURL
+            )
+        } catch {
+            print("⚠️ 网易云 API 调用失败: \(error.localizedDescription)")
+            return nil
+        }
     }
     
     // 方案1: 基于 URL 模式直接构造跨平台链接
@@ -449,6 +1032,35 @@ class OdesliService: ObservableObject {
             print("✅ 从 URL 提取: Apple Music")
         }
         
+        // 如果是网易云音乐链接
+        if url.contains("music.163.com") || url.contains("y.music.163.com") {
+            // 网易云音乐链接已知
+            if let songId = extractNeteaseSongId(from: url) {
+                let neteaseURL = "https://music.163.com/#/song?id=\(songId)"
+                let nativeURL = "orpheus://song/\(songId)"
+                links.append(AppPlatformLink(
+                    platformKey: "netease",
+                    displayName: "网易云音乐",
+                    iconName: "netease.icon",
+                    accentColor: "#E60026",
+                    url: neteaseURL,
+                    nativeUrl: nativeURL
+                ))
+                print("✅ 从 URL 提取: 网易云音乐 (ID: \(songId))")
+            } else {
+                // 如果无法提取ID，仍然添加原始链接
+                links.append(AppPlatformLink(
+                    platformKey: "netease",
+                    displayName: "网易云音乐",
+                    iconName: "netease.icon",
+                    accentColor: "#E60026",
+                    url: url,
+                    nativeUrl: nil
+                ))
+                print("✅ 从 URL 提取: 网易云音乐")
+            }
+        }
+        
         return links.isEmpty ? nil : links
     }
     
@@ -461,6 +1073,46 @@ class OdesliService: ObservableObject {
             } else {
                 return String(afterTrack)
             }
+        }
+        return nil
+    }
+    
+    // 提取网易云音乐 Song ID
+    // 解析短链：跟随重定向获取最终 URL
+    private func resolveURL(_ urlString: String) async -> String? {
+        guard let url = URL(string: urlString) else { return nil }
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 8.0
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let finalURL = response.url?.absoluteString ?? urlString
+            if finalURL != urlString {
+                print("🔄 重定向解析: \(urlString) → \(finalURL)")
+            }
+            return finalURL
+        } catch {
+            print("⚠️ 无法跟随重定向: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private func extractNeteaseSongId(from url: String) -> String? {
+        // 支持多种URL格式
+        // https://music.163.com/#/song?id=123456
+        // https://music.163.com/song?id=123456
+        // https://y.music.163.com/m/song?id=123456
+        
+        if let range = url.range(of: "id=") {
+            let afterId = url[range.upperBound...]
+            var songId = ""
+            for char in afterId {
+                if char.isNumber {
+                    songId.append(char)
+                } else {
+                    break
+                }
+            }
+            return songId.isEmpty ? nil : songId
         }
         return nil
     }

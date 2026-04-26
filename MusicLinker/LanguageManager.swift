@@ -50,6 +50,12 @@ class LanguageManager: ObservableObject {
                 .japanese: "音楽リンクを貼り付け",
                 .russian: "Вставить музыкальную ссылку"
             ],
+            "search.placeholder": [
+                .chinese: "支持 Spotify / Apple Music / 网易云音乐…",
+                .english: "Spotify / Apple Music / YouTube Music…",
+                .japanese: "Spotify / Apple Music / YouTube Music…",
+                .russian: "Spotify / Apple Music / YouTube Music…"
+            ],
             "button.paste": [
                 .chinese: "粘贴",
                 .english: "Paste",

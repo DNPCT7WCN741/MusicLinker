@@ -55,27 +55,64 @@ struct LastFmImage: Codable {
     }
 }
 
-enum AppTheme {
-    case dark
-    case light
+enum AppTheme: String, CaseIterable, Codable {
+    case dark = "深邃蓝"
+    case light = "清爽白"
+    case black = "纯黑夜"
+    case purple = "梦幻紫"
+    case green = "自然绿"
+    case orange = "活力橙"
+    case pink = "浪漫粉"
 
+    var displayName: String { rawValue }
+    
     var preferredColorScheme: ColorScheme {
         switch self {
-        case .dark: return .dark
-        case .light: return .light
+        case .dark, .black, .purple, .green: return .dark
+        case .light, .orange, .pink: return .light
         }
     }
 
     var backgroundColors: [Color] {
         switch self {
         case .dark:
-            let colors: [Color] = [
+            return [
                 Color(hex: "#111310"),
                 Color(hex: "#171E30"),
                 Color(hex: "#0F1520")
             ]
-            return colors
-        case .light: return [Color.white, Color(hex: "#F7FBFF"), Color(hex: "#EDF4FF")]
+        case .light:
+            return [Color.white, Color(hex: "#F7FBFF"), Color(hex: "#EDF4FF")]
+        case .black:
+            return [
+                Color(hex: "#000000"),
+                Color(hex: "#0A0A0A"),
+                Color(hex: "#000000")
+            ]
+        case .purple:
+            return [
+                Color(hex: "#1A0E2E"),
+                Color(hex: "#2E1A47"),
+                Color(hex: "#160A2E")
+            ]
+        case .green:
+            return [
+                Color(hex: "#0A1F12"),
+                Color(hex: "#143525"),
+                Color(hex: "#0D1F15")
+            ]
+        case .orange:
+            return [
+                Color(hex: "#FFF9F5"),
+                Color(hex: "#FFF4ED"),
+                Color(hex: "#FFEDE0")
+            ]
+        case .pink:
+            return [
+                Color(hex: "#FFF5F7"),
+                Color(hex: "#FFE4E9"),
+                Color(hex: "#FFD6DD")
+            ]
         }
     }
 
@@ -83,6 +120,11 @@ enum AppTheme {
         switch self {
         case .dark: return Color(hex: "#111821")
         case .light: return Color.white
+        case .black: return Color(hex: "#000000")
+        case .purple: return Color(hex: "#1E0F35")
+        case .green: return Color(hex: "#0F2318")
+        case .orange: return Color(hex: "#FFFAF7")
+        case .pink: return Color(hex: "#FFF7F9")
         }
     }
 
@@ -90,6 +132,11 @@ enum AppTheme {
         switch self {
         case .dark: return Color(hex: "#182032")
         case .light: return Color(hex: "#F1F7FF")
+        case .black: return Color(hex: "#0D0D0D")
+        case .purple: return Color(hex: "#2D1548")
+        case .green: return Color(hex: "#1A3828")
+        case .orange: return Color(hex: "#FFF0E6")
+        case .pink: return Color(hex: "#FFEAF0")
         }
     }
 
@@ -97,6 +144,11 @@ enum AppTheme {
         switch self {
         case .dark: return Color(hex: "#1D4ED8")
         case .light: return Color(hex: "#2563EB")
+        case .black: return Color(hex: "#FFFFFF")
+        case .purple: return Color(hex: "#A855F7")
+        case .green: return Color(hex: "#10B981")
+        case .orange: return Color(hex: "#F97316")
+        case .pink: return Color(hex: "#EC4899")
         }
     }
 
@@ -104,13 +156,20 @@ enum AppTheme {
         switch self {
         case .dark: return Color(hex: "#3B82F6")
         case .light: return Color(hex: "#60A5FA")
+        case .black: return Color(hex: "#E5E5E5")
+        case .purple: return Color(hex: "#C084FC")
+        case .green: return Color(hex: "#34D399")
+        case .orange: return Color(hex: "#FB923C")
+        case .pink: return Color(hex: "#F472B6")
         }
     }
 
     var textPrimary: Color {
         switch self {
-        case .dark: return Color.white
+        case .dark, .black, .purple, .green: return Color.white
         case .light: return Color(hex: "#0F172A")
+        case .orange: return Color(hex: "#7C2D12")
+        case .pink: return Color(hex: "#831843")
         }
     }
 
@@ -118,13 +177,33 @@ enum AppTheme {
         switch self {
         case .dark: return Color(hex: "#94A3B8")
         case .light: return Color(hex: "#475569")
+        case .black: return Color(hex: "#A0A0A0")
+        case .purple: return Color(hex: "#C4B5FD")
+        case .green: return Color(hex: "#86EFAC")
+        case .orange: return Color(hex: "#C2410C")
+        case .pink: return Color(hex: "#BE185D")
         }
     }
 
     var cardStroke: Color {
         switch self {
-        case .dark: return Color.white.opacity(0.08)
+        case .dark, .purple, .green: return Color.white.opacity(0.08)
         case .light: return Color(hex: "#CBD5E1").opacity(0.25)
+        case .black: return Color.white.opacity(0.15)
+        case .orange: return Color(hex: "#FDBA74").opacity(0.3)
+        case .pink: return Color(hex: "#FBCFE8").opacity(0.3)
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .dark: return "moon.stars.fill"
+        case .light: return "sun.max.fill"
+        case .black: return "circle.fill"
+        case .purple: return "sparkles"
+        case .green: return "leaf.fill"
+        case .orange: return "flame.fill"
+        case .pink: return "heart.fill"
         }
     }
 }
@@ -209,7 +288,13 @@ struct ResultView: View {
             }
         }
         .sheet(isPresented: $isShowingShareSheet) {
-            ActivityViewController(activityItems: shareItems)
+            if #available(iOS 16.0, *) {
+                ActivityViewController(activityItems: shareItems)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+            } else {
+                ActivityViewController(activityItems: shareItems)
+            }
         }
         .alert(languageManager.translate("result.videoFailed"), isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil }})) {
             Button(languageManager.translate("result.ok"), role: .cancel) {
@@ -779,12 +864,25 @@ struct ResultView: View {
 
 struct ActivityViewController: UIViewControllerRepresentable {
     let activityItems: [Any]
+    @Environment(\.dismiss) private var dismiss
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+        let controller = UIActivityViewController(
+            activityItems: activityItems,
+            applicationActivities: nil
+        )
+        
+        // 设置完成回调以避免警告
+        controller.completionWithItemsHandler = { _, _, _, _ in
+            // 完成后自动关闭
+        }
+        
+        return controller
     }
 
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
+        // 空实现，避免不必要的更新
+    }
 }
 
 // MARK: - Spotify Preview Models
