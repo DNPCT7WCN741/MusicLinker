@@ -139,18 +139,7 @@ struct AppPlatformLink: Identifiable {
 
 // MARK: - Odesli Service
 import SwiftUI
-import SwiftData // 截图显示你还用了 SwiftData，保留它
-import Combine // ✅ 确保这一行存在
-
-@Observable // 使用这个宏
-class MyData {
-    var name: String = ""
-    // 不需要写 objectWillChange
-}
-@Observable // 使用宏，连 ObservableObject 协议都不需要写
-class MyModel {
-    var name = "Tashkent"
-}
+import Combine
 
 class OdesliService: ObservableObject {
     @Published var isLoading = false
@@ -160,6 +149,12 @@ class OdesliService: ObservableObject {
 
     private let baseURL = "https://api.song.link/v1-alpha.1/links"
     private let songwhipURL = "https://songwhip.com/"
+
+    // CN 模式：Apple Music 链接转为中国区
+    var isCNMode: Bool {
+        get { UserDefaults.standard.object(forKey: "isCNMode") == nil ? true : UserDefaults.standard.bool(forKey: "isCNMode") }
+        set { UserDefaults.standard.set(newValue, forKey: "isCNMode") }
+    }
     
     // 网易云音乐 API 地址（用户可配置，默认为空表示不使用API）
     private var neteaseAPIBaseURL: String {
@@ -281,6 +276,24 @@ class OdesliService: ObservableObject {
                 }
             }
 
+            // 无论如何，如果没有网易云链接，主动搜索添加
+            let hasNetease = songResult.platforms.contains { $0.platformKey == "netease" || $0.displayName == "网易云音乐" }
+            if !hasNetease {
+                print("🔍 主动搜索网易云音乐链接...")
+                if let neteaseLink = await searchNeteaseByTitleAndArtist(title: songResult.title, artist: songResult.artist) {
+                    songResult = mergeResults(primary: songResult, backup: [neteaseLink])
+                }
+            }
+
+            // 如果没有 QQ 音乐链接，主动搜索添加
+            let hasQQ = songResult.platforms.contains { $0.platformKey == "qqmusic" || $0.displayName == "QQ 音乐" }
+            if !hasQQ {
+                print("🔍 主动搜索 QQ 音乐链接...")
+                if let qqLink = await searchQQByTitleAndArtist(title: songResult.title, artist: songResult.artist) {
+                    songResult = mergeResults(primary: songResult, backup: [qqLink])
+                }
+            }
+
             await MainActor.run {
                 self.result = songResult
                 self.isLoading = false
@@ -380,6 +393,13 @@ class OdesliService: ObservableObject {
                 )
                 var platforms = songResult.platforms.filter { $0.displayName != "QQ 音乐" }
                 platforms.append(qqLink)
+                
+                // 如果没有网易云链接，主动搜索添加
+                let hasNeteaseFromQQ = platforms.contains { $0.platformKey == "netease" || $0.displayName == "网易云音乐" }
+                if !hasNeteaseFromQQ, let neteaseSearchLink = await searchNeteaseByTitleAndArtist(title: title, artist: artist) {
+                    platforms.append(neteaseSearchLink)
+                }
+                
                 platforms.sort {
                     let p1 = getPlatformInfo(for: $0.platformKey)?.priority ?? 999
                     let p2 = getPlatformInfo(for: $1.platformKey)?.priority ?? 999
@@ -414,6 +434,7 @@ class OdesliService: ObservableObject {
         var platforms = [qqLink]
         if let spotifyLink = constructSpotifySearchLink(title: title, artist: artist) { platforms.append(spotifyLink) }
         if let amLink = constructAppleMusicSearchLink(title: title, artist: artist) { platforms.append(amLink) }
+        if let neteaseLink = await searchNeteaseByTitleAndArtist(title: title, artist: artist) { platforms.append(neteaseLink) }
         
         await MainActor.run {
             self.result = SongResult(
@@ -542,6 +563,13 @@ class OdesliService: ObservableObject {
                 )
                 var platforms = songResult.platforms.filter { $0.displayName != "网易云音乐" }
                 platforms.append(neteaseLink)
+                
+                // 如果没有 QQ 音乐链接，主动搜索添加
+                let hasQQFromNetease = platforms.contains { $0.platformKey == "qqmusic" || $0.displayName == "QQ 音乐" }
+                if !hasQQFromNetease, let qqSearchLink = await searchQQByTitleAndArtist(title: title, artist: artist) {
+                    platforms.append(qqSearchLink)
+                }
+                
                 platforms.sort {
                     let p1 = getPlatformInfo(for: $0.platformKey)?.priority ?? 999
                     let p2 = getPlatformInfo(for: $1.platformKey)?.priority ?? 999
@@ -701,6 +729,9 @@ class OdesliService: ObservableObject {
         if let appleMusicLink = constructAppleMusicSearchLink(title: title, artist: artist) {
             platforms.append(appleMusicLink)
         }
+        if let qqLink = await searchQQByTitleAndArtist(title: title, artist: artist) {
+            platforms.append(qqLink)
+        }
         
         await MainActor.run {
             self.result = SongResult(
@@ -774,12 +805,17 @@ class OdesliService: ObservableObject {
             if let info = getPlatformInfo(for: key) {
                 // 检查是否已添加该平台（避免 appleMusic 和 itunes 重复）
                 if !addedPlatforms.contains(info.displayName) {
+                    // CN 模式下 Apple Music 链接转为中国区
+                    var linkURL = platformData.url
+                    if isCNMode && (key == "appleMusic" || key == "itunes") {
+                        linkURL = convertAppleMusicToCN(linkURL)
+                    }
                     links.append(AppPlatformLink(
                         platformKey: key,
                         displayName: info.displayName,
                         iconName: info.icon,
                         accentColor: info.color,
-                        url: platformData.url,
+                        url: linkURL,
                         nativeUrl: platformData.nativeAppUriMobile
                     ))
                     addedPlatforms.insert(info.displayName)
@@ -843,9 +879,24 @@ class OdesliService: ObservableObject {
         )
     }
     
+    /// 将 Apple Music 链接转为中国区（/us/ → /cn/，或替换其他地区代码）
+    private func convertAppleMusicToCN(_ url: String) -> String {
+        // 匹配 music.apple.com 或 itunes.apple.com 的地区代码并替换为 cn
+        var result = url
+        let regionPattern = #"((?:music|itunes)\.apple\.com/)([a-z]{2})(/)"#
+        if let regex = try? NSRegularExpression(pattern: regionPattern),
+           let match = regex.firstMatch(in: result, range: NSRange(result.startIndex..., in: result)),
+           match.numberOfRanges == 4,
+           let range = Range(match.range(at: 0), in: result) {
+            let prefix = result[Range(match.range(at: 1), in: result)!]
+            let suffix = result[Range(match.range(at: 3), in: result)!]
+            result = result.replacingCharacters(in: range, with: "\(prefix)cn\(suffix)")
+        }
+        return result
+    }
+
     // MARK: - 备用 API（使用多个来源）
-    private func fetchFromBackupAPI(url: String, title: String, artist: String, missingSpotify: Bool, missingAppleMusic: Bool) async throws -> [AppPlatformLink]? {
-        print("🔄 尝试备用 API 补充...")
+    private func fetchFromBackupAPI(url: String, title: String, artist: String, missingSpotify: Bool, missingAppleMusic: Bool) async throws -> [AppPlatformLink]? {        print("🔄 尝试备用 API 补充...")
         print("   歌曲信息: \(title) - \(artist)")
         
         var backupLinks: [AppPlatformLink] = []
@@ -878,13 +929,13 @@ class OdesliService: ObservableObject {
             }
         }
         
-        // 方案4: 尝试网易云音乐 API，如果失败则使用搜索链接
-        if let neteaseAPILink = await searchNeteaseAPI(title: title, artist: artist) {
+        // 方案4: 通过网易云官方搜索接口获取精确直链
+        if let neteaseDirectLink = await searchNeteaseByTitleAndArtist(title: title, artist: artist) {
+            backupLinks.append(neteaseDirectLink)
+            print("✅ 网易云直接搜索获取精确链接")
+        } else if let neteaseAPILink = await searchNeteaseAPI(title: title, artist: artist) {
             backupLinks.append(neteaseAPILink)
-            print("✅ 使用网易云 API 获取精确链接")
-        } else if let neteaseSearchLink = constructNeteaseSearchLink(title: title, artist: artist) {
-            backupLinks.append(neteaseSearchLink)
-            print("✅ 回退到网易云音乐搜索链接")
+            print("✅ 使用网易云第三方 API 获取链接")
         }
         
         return backupLinks.isEmpty ? nil : backupLinks
@@ -938,7 +989,62 @@ class OdesliService: ObservableObject {
     }
     
     // MARK: - 网易云音乐 API 调用
-    
+
+    /// 通过歌名+艺术家直接调用网易云官方网页搜索接口，返回精确直链（无需认证）
+    private func searchNeteaseByTitleAndArtist(title: String, artist: String) async -> AppPlatformLink? {
+        let query = "\(title) \(artist)"
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://music.163.com/api/search/get?s=\(encoded)&type=1&limit=5&offset=0") else { return nil }
+
+        print("🔍 网易云直接搜索: \(query)")
+
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 8.0
+            request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
+            request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return nil }
+
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let result = json["result"] as? [String: Any],
+                  let songs = result["songs"] as? [[String: Any]],
+                  !songs.isEmpty else {
+                print("⚠️ 网易云搜索无结果")
+                return nil
+            }
+
+            // 优先找艺术家名包含匹配的结果
+            let artistLower = artist.lowercased()
+            var bestSong = songs[0]
+            for song in songs {
+                let songArtists = song["artists"] as? [[String: Any]] ?? []
+                let songArtistNames = songArtists.compactMap { $0["name"] as? String }.joined(separator: " ").lowercased()
+                if !artistLower.isEmpty && songArtistNames.contains(artistLower) {
+                    bestSong = song
+                    break
+                }
+            }
+
+            guard let songId = bestSong["id"] as? Int else { return nil }
+            let songName = bestSong["name"] as? String ?? title
+            print("✅ 网易云搜索找到: \(songName) (ID: \(songId))")
+
+            return AppPlatformLink(
+                platformKey: "netease",
+                displayName: "网易云音乐",
+                iconName: "netease.icon",
+                accentColor: "#E60026",
+                url: "https://music.163.com/#/song?id=\(songId)",
+                nativeUrl: "orpheus://song/\(songId)"
+            )
+        } catch {
+            print("⚠️ 网易云搜索失败: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     // 通过网易云音乐 API 搜索歌曲
     private func searchNeteaseAPI(title: String, artist: String) async -> AppPlatformLink? {
         // 如果未启用 API，直接返回 nil
@@ -997,6 +1103,78 @@ class OdesliService: ObservableObject {
         }
     }
     
+    /// 通过歌名+艺术家搜索 QQ 音乐，返回精确直链（无需认证）
+    private func searchQQByTitleAndArtist(title: String, artist: String) async -> AppPlatformLink? {
+        let query = "\(title) \(artist)"
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?n=5&p=1&w=\(encoded)&format=json&cr=1&aggr=1&flag_qc=0") else { return nil }
+
+        print("🔍 QQ音乐搜索: \(query)")
+
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 8.0
+            request.setValue("https://y.qq.com", forHTTPHeaderField: "Referer")
+            request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                return constructQQSearchLink(title: title, artist: artist)
+            }
+
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let dataObj = json["data"] as? [String: Any],
+                  let songObj = dataObj["song"] as? [String: Any],
+                  let list = songObj["list"] as? [[String: Any]],
+                  !list.isEmpty else {
+                print("⚠️ QQ音乐搜索无结果，使用搜索链接")
+                return constructQQSearchLink(title: title, artist: artist)
+            }
+
+            // 优先找艺术家名包含匹配的结果
+            let artistLower = artist.lowercased()
+            var bestSong = list[0]
+            for song in list {
+                let singers = song["singer"] as? [[String: Any]] ?? []
+                let singerNames = singers.compactMap { $0["name"] as? String }.joined(separator: " ").lowercased()
+                if !artistLower.isEmpty && singerNames.contains(artistLower) {
+                    bestSong = song
+                    break
+                }
+            }
+
+            guard let songmid = bestSong["songmid"] as? String, !songmid.isEmpty else {
+                return constructQQSearchLink(title: title, artist: artist)
+            }
+            let songName = bestSong["songname"] as? String ?? title
+            print("✅ QQ音乐搜索找到: \(songName) (mid: \(songmid))")
+
+            return AppPlatformLink(
+                platformKey: "qqmusic",
+                displayName: "QQ 音乐",
+                iconName: "qqmusic.icon",
+                accentColor: "#31C27C",
+                url: "https://y.qq.com/n/ryqq/songDetail/\(songmid)",
+                nativeUrl: "qqmusic://playSong?songmid=\(songmid)"
+            )
+        } catch {
+            print("⚠️ QQ音乐搜索失败: \(error.localizedDescription)")
+            return constructQQSearchLink(title: title, artist: artist)
+        }
+    }
+
+    private func constructQQSearchLink(title: String, artist: String) -> AppPlatformLink? {
+        let query = "\(title) \(artist)".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        return AppPlatformLink(
+            platformKey: "qqmusic",
+            displayName: "QQ 音乐",
+            iconName: "qqmusic.icon",
+            accentColor: "#31C27C",
+            url: "https://y.qq.com/n/ryqq/search?w=\(query)",
+            nativeUrl: nil
+        )
+    }
+
     // 方案1: 基于 URL 模式直接构造跨平台链接
     private func constructLinksFromURL(_ url: String) -> [AppPlatformLink]? {
         var links: [AppPlatformLink] = []
@@ -1077,22 +1255,20 @@ class OdesliService: ObservableObject {
         return nil
     }
     
-    // 提取网易云音乐 Song ID
-    // 解析短链：跟随重定向获取最终 URL
+    // 解析短链：只取第一跳 302 的 Location 头，不继续跟随
+    // 原因：URLSession 自动跟随所有重定向后 response.url 是最终 HTML 页，未必含 songmid
+    // 解析短链：只取第一跳 302 的 Location 头，立即返回，不等待响应体
+    // 不能用 async data(for:) + delegate，那会在 redirect 被阻断后 hang 住触发系统超时
     private func resolveURL(_ urlString: String) async -> String? {
         guard let url = URL(string: urlString) else { return nil }
-        do {
+        return await withCheckedContinuation { continuation in
             var request = URLRequest(url: url)
             request.timeoutInterval = 8.0
-            let (_, response) = try await URLSession.shared.data(for: request)
-            let finalURL = response.url?.absoluteString ?? urlString
-            if finalURL != urlString {
-                print("🔄 重定向解析: \(urlString) → \(finalURL)")
-            }
-            return finalURL
-        } catch {
-            print("⚠️ 无法跟随重定向: \(error.localizedDescription)")
-            return nil
+            request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
+
+            let capturer = RedirectCapturer(continuation: continuation, originalURL: urlString)
+            let session = URLSession(configuration: .ephemeral, delegate: capturer, delegateQueue: nil)
+            session.dataTask(with: request).resume()
         }
     }
 
@@ -1243,4 +1419,57 @@ struct SongResult {
     let thumbnailUrl: String?
     let songLinkUrl: String
     let platforms: [AppPlatformLink]
+}
+
+// MARK: - 短链重定向捕获代理
+// 在收到第一个 302 时立即 resume continuation，不等响应体，避免系统超时
+private class RedirectCapturer: NSObject, URLSessionTaskDelegate, URLSessionDataDelegate {
+    private let continuation: CheckedContinuation<String?, Never>
+    private let originalURL: String
+    private var resumed = false
+
+    init(continuation: CheckedContinuation<String?, Never>, originalURL: String) {
+        self.continuation = continuation
+        self.originalURL = originalURL
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard !resumed else { completionHandler(nil); return }
+        resumed = true
+
+        // 优先用 response 里的 Location 头，如果没有就用 URLRequest 的 URL
+        let location = response.value(forHTTPHeaderField: "Location")
+            ?? request.url?.absoluteString
+            ?? originalURL
+        let finalURL: String
+        if location.hasPrefix("http") {
+            finalURL = location
+        } else if let base = URL(string: originalURL) {
+            finalURL = "\(base.scheme ?? "https")://\(base.host ?? "")\(location)"
+        } else {
+            finalURL = location
+        }
+        print("🔄 重定向解析: \(originalURL) → \(finalURL)")
+        continuation.resume(returning: finalURL)
+        completionHandler(nil) // 阻止继续跟随
+        task.cancel()
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard !resumed else { return }
+        resumed = true
+        // 没有发生重定向（或取消），返回 nil 让调用方处理
+        continuation.resume(returning: nil)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        // 不需要响应体，取消任务节省资源
+        dataTask.cancel()
+    }
 }

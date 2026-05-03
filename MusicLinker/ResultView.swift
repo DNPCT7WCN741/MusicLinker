@@ -77,121 +77,117 @@ enum AppTheme: String, CaseIterable, Codable {
         switch self {
         case .dark:
             return [
-                Color(hex: "#111310"),
-                Color(hex: "#171E30"),
-                Color(hex: "#0F1520")
+                Color(.sRGB, red: 0.067, green: 0.075, blue: 0.063),
+                Color(.sRGB, red: 0.090, green: 0.118, blue: 0.188),
+                Color(.sRGB, red: 0.059, green: 0.082, blue: 0.125)
             ]
         case .light:
-            return [Color.white, Color(hex: "#F7FBFF"), Color(hex: "#EDF4FF")]
+            return [Color.white, Color(.sRGB, red: 0.969, green: 0.984, blue: 1.0), Color(.sRGB, red: 0.929, green: 0.957, blue: 1.0)]
         case .black:
-            return [
-                Color(hex: "#000000"),
-                Color(hex: "#0A0A0A"),
-                Color(hex: "#000000")
-            ]
+            return [Color.black, Color(.sRGB, red: 0.039, green: 0.039, blue: 0.039), Color.black]
         case .purple:
             return [
-                Color(hex: "#1A0E2E"),
-                Color(hex: "#2E1A47"),
-                Color(hex: "#160A2E")
+                Color(.sRGB, red: 0.102, green: 0.055, blue: 0.180),
+                Color(.sRGB, red: 0.180, green: 0.102, blue: 0.278),
+                Color(.sRGB, red: 0.086, green: 0.039, blue: 0.180)
             ]
         case .green:
             return [
-                Color(hex: "#0A1F12"),
-                Color(hex: "#143525"),
-                Color(hex: "#0D1F15")
+                Color(.sRGB, red: 0.039, green: 0.122, blue: 0.071),
+                Color(.sRGB, red: 0.078, green: 0.208, blue: 0.145),
+                Color(.sRGB, red: 0.051, green: 0.122, blue: 0.082)
             ]
         case .orange:
             return [
-                Color(hex: "#FFF9F5"),
-                Color(hex: "#FFF4ED"),
-                Color(hex: "#FFEDE0")
+                Color(.sRGB, red: 1.0, green: 0.976, blue: 0.961),
+                Color(.sRGB, red: 1.0, green: 0.957, blue: 0.929),
+                Color(.sRGB, red: 1.0, green: 0.929, blue: 0.878)
             ]
         case .pink:
             return [
-                Color(hex: "#FFF5F7"),
-                Color(hex: "#FFE4E9"),
-                Color(hex: "#FFD6DD")
+                Color(.sRGB, red: 1.0, green: 0.961, blue: 0.969),
+                Color(.sRGB, red: 1.0, green: 0.894, blue: 0.914),
+                Color(.sRGB, red: 1.0, green: 0.839, blue: 0.867)
             ]
         }
     }
 
     var surface: Color {
         switch self {
-        case .dark: return Color(hex: "#111821")
-        case .light: return Color.white
-        case .black: return Color(hex: "#000000")
-        case .purple: return Color(hex: "#1E0F35")
-        case .green: return Color(hex: "#0F2318")
-        case .orange: return Color(hex: "#FFFAF7")
-        case .pink: return Color(hex: "#FFF7F9")
+        case .dark:   return Color(.sRGB, red: 0.067, green: 0.094, blue: 0.129)
+        case .light:  return Color.white
+        case .black:  return Color.black
+        case .purple: return Color(.sRGB, red: 0.118, green: 0.059, blue: 0.208)
+        case .green:  return Color(.sRGB, red: 0.059, green: 0.137, blue: 0.094)
+        case .orange: return Color(.sRGB, red: 1.0, green: 0.980, blue: 0.969)
+        case .pink:   return Color(.sRGB, red: 1.0, green: 0.969, blue: 0.976)
         }
     }
 
     var surfaceAlt: Color {
         switch self {
-        case .dark: return Color(hex: "#182032")
-        case .light: return Color(hex: "#F1F7FF")
-        case .black: return Color(hex: "#0D0D0D")
-        case .purple: return Color(hex: "#2D1548")
-        case .green: return Color(hex: "#1A3828")
-        case .orange: return Color(hex: "#FFF0E6")
-        case .pink: return Color(hex: "#FFEAF0")
+        case .dark:   return Color(.sRGB, red: 0.094, green: 0.125, blue: 0.196)
+        case .light:  return Color(.sRGB, red: 0.945, green: 0.969, blue: 1.0)
+        case .black:  return Color(.sRGB, red: 0.051, green: 0.051, blue: 0.051)
+        case .purple: return Color(.sRGB, red: 0.176, green: 0.082, blue: 0.282)
+        case .green:  return Color(.sRGB, red: 0.102, green: 0.220, blue: 0.157)
+        case .orange: return Color(.sRGB, red: 1.0, green: 0.941, blue: 0.902)
+        case .pink:   return Color(.sRGB, red: 1.0, green: 0.918, blue: 0.941)
         }
     }
 
     var accent: Color {
         switch self {
-        case .dark: return Color(hex: "#1D4ED8")
-        case .light: return Color(hex: "#2563EB")
-        case .black: return Color(hex: "#FFFFFF")
-        case .purple: return Color(hex: "#A855F7")
-        case .green: return Color(hex: "#10B981")
-        case .orange: return Color(hex: "#F97316")
-        case .pink: return Color(hex: "#EC4899")
+        case .dark:   return Color(.sRGB, red: 0.114, green: 0.306, blue: 0.847)
+        case .light:  return Color(.sRGB, red: 0.145, green: 0.388, blue: 0.922)
+        case .black:  return Color.white
+        case .purple: return Color(.sRGB, red: 0.659, green: 0.333, blue: 0.969)
+        case .green:  return Color(.sRGB, red: 0.063, green: 0.725, blue: 0.506)
+        case .orange: return Color(.sRGB, red: 0.976, green: 0.451, blue: 0.086)
+        case .pink:   return Color(.sRGB, red: 0.925, green: 0.286, blue: 0.600)
         }
     }
 
     var accentSecondary: Color {
         switch self {
-        case .dark: return Color(hex: "#3B82F6")
-        case .light: return Color(hex: "#60A5FA")
-        case .black: return Color(hex: "#E5E5E5")
-        case .purple: return Color(hex: "#C084FC")
-        case .green: return Color(hex: "#34D399")
-        case .orange: return Color(hex: "#FB923C")
-        case .pink: return Color(hex: "#F472B6")
+        case .dark:   return Color(.sRGB, red: 0.231, green: 0.510, blue: 0.965)
+        case .light:  return Color(.sRGB, red: 0.376, green: 0.647, blue: 0.980)
+        case .black:  return Color(.sRGB, red: 0.898, green: 0.898, blue: 0.898)
+        case .purple: return Color(.sRGB, red: 0.753, green: 0.518, blue: 0.988)
+        case .green:  return Color(.sRGB, red: 0.204, green: 0.827, blue: 0.600)
+        case .orange: return Color(.sRGB, red: 0.984, green: 0.573, blue: 0.235)
+        case .pink:   return Color(.sRGB, red: 0.957, green: 0.447, blue: 0.714)
         }
     }
 
     var textPrimary: Color {
         switch self {
         case .dark, .black, .purple, .green: return Color.white
-        case .light: return Color(hex: "#0F172A")
-        case .orange: return Color(hex: "#7C2D12")
-        case .pink: return Color(hex: "#831843")
+        case .light:  return Color(.sRGB, red: 0.059, green: 0.090, blue: 0.165)
+        case .orange: return Color(.sRGB, red: 0.486, green: 0.176, blue: 0.071)
+        case .pink:   return Color(.sRGB, red: 0.514, green: 0.094, blue: 0.263)
         }
     }
 
     var textSecondary: Color {
         switch self {
-        case .dark: return Color(hex: "#94A3B8")
-        case .light: return Color(hex: "#475569")
-        case .black: return Color(hex: "#A0A0A0")
-        case .purple: return Color(hex: "#C4B5FD")
-        case .green: return Color(hex: "#86EFAC")
-        case .orange: return Color(hex: "#C2410C")
-        case .pink: return Color(hex: "#BE185D")
+        case .dark:   return Color(.sRGB, red: 0.580, green: 0.639, blue: 0.718)
+        case .light:  return Color(.sRGB, red: 0.278, green: 0.337, blue: 0.404)
+        case .black:  return Color(.sRGB, red: 0.627, green: 0.627, blue: 0.627)
+        case .purple: return Color(.sRGB, red: 0.769, green: 0.710, blue: 0.992)
+        case .green:  return Color(.sRGB, red: 0.525, green: 0.937, blue: 0.675)
+        case .orange: return Color(.sRGB, red: 0.761, green: 0.255, blue: 0.047)
+        case .pink:   return Color(.sRGB, red: 0.745, green: 0.094, blue: 0.365)
         }
     }
 
     var cardStroke: Color {
         switch self {
         case .dark, .purple, .green: return Color.white.opacity(0.08)
-        case .light: return Color(hex: "#CBD5E1").opacity(0.25)
-        case .black: return Color.white.opacity(0.15)
-        case .orange: return Color(hex: "#FDBA74").opacity(0.3)
-        case .pink: return Color(hex: "#FBCFE8").opacity(0.3)
+        case .light:  return Color(.sRGB, red: 0.796, green: 0.835, blue: 0.882).opacity(0.25)
+        case .black:  return Color.white.opacity(0.15)
+        case .orange: return Color(.sRGB, red: 0.992, green: 0.729, blue: 0.455).opacity(0.3)
+        case .pink:   return Color(.sRGB, red: 0.984, green: 0.812, blue: 0.910).opacity(0.3)
         }
     }
     
@@ -270,21 +266,6 @@ struct ResultView: View {
             // Load cover image if available
             Task {
                 await loadCoverImage()
-            }
-            
-            // Try to fetch album cover from Last.fm if not available
-            if result.thumbnailUrl == nil || result.thumbnailUrl?.isEmpty == true {
-                Task {
-                    if let coverUrl = await AlbumCoverService.fetchAlbumCover(artist: result.artist, album: result.album ?? result.title) {
-                        await MainActor.run {
-                            lastFmCoverUrl = coverUrl
-                            // Reload cover image with Last.fm URL
-                            Task {
-                                await loadCoverImage()
-                            }
-                        }
-                    }
-                }
             }
         }
         .sheet(isPresented: $isShowingShareSheet) {

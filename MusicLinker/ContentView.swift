@@ -36,6 +36,8 @@ struct SearchHistoryItem: Identifiable, Codable {
 
 // MARK: - Main View
 struct ContentView: View {
+    // 静态缓存：NSDataDetector 编译成本高，只需构建一次
+    private static let urlDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
     @StateObject private var service = OdesliService()
     @EnvironmentObject var languageManager: LanguageManager
     
@@ -91,22 +93,23 @@ struct ContentView: View {
                 }
             }
             .background(
-                GeometryReader { geo in
-                    ZStack {
-                        Circle()
-                            .fill(theme.accent.opacity(0.15))
-                            .frame(width: 300, height: 300)
-                            .blur(radius: 80)
-                            .offset(x: -50, y: 100)
-
-                        Circle()
-                            .fill(theme.accentSecondary.opacity(0.12))
-                            .frame(width: 250, height: 250)
-                            .blur(radius: 70)
-                            .offset(x: geo.size.width - 150, y: geo.size.height - 300)
-                    }
+                ZStack {
+                    // RadialGradient 无需 Metal shader 编译，冷启动更快
+                    RadialGradient(
+                        colors: [theme.accent.opacity(0.22), Color.clear],
+                        center: UnitPoint(x: 0.15, y: 0.42),
+                        startRadius: 0,
+                        endRadius: 220
+                    )
+                    RadialGradient(
+                        colors: [theme.accentSecondary.opacity(0.18), Color.clear],
+                        center: UnitPoint(x: 0.88, y: 0.82),
+                        startRadius: 0,
+                        endRadius: 190
+                    )
                 }
                 .ignoresSafeArea()
+                .allowsHitTesting(false)
             )
             .navigationBarHidden(true)
         }
@@ -400,7 +403,7 @@ struct ContentView: View {
                     ForEach(supportedPlatforms, id: \.name) { platform in
                         HStack(spacing: 6) {
                             Circle()
-                                .fill(Color(hex: platform.color))
+                                .fill(platform.color)
                                 .frame(width: 8, height: 8)
                             Text(platform.name)
                                 .font(.system(size: 12, weight: .medium))
@@ -432,7 +435,8 @@ struct ContentView: View {
     private func pasteFromClipboard() {
         buttonFeedback()
         if let string = UIPasteboard.general.string {
-            inputURL = string
+            // 如果剪贴板内容包含 URL（如网易云分享文字），自动提取
+            inputURL = extractURL(from: string) ?? string
         }
     }
     
@@ -441,14 +445,25 @@ struct ContentView: View {
         buttonFeedback()
         isInputFocused = false
 
-        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-            Task {
-                await service.fetchLinks(url: inputURL)
-                if let result = service.result {
-                    saveToHistory(url: inputURL, title: result.title, artist: result.artist)
-                }
+        // 从用户输入中提取第一个 URL（处理网易云等带附加文字的分享文本）
+        let extracted = extractURL(from: inputURL) ?? inputURL
+
+        // Task 是异步调度，withAnimation 不能包裹异步工作
+        // 实际 UI 动画由 service 内部 MainActor 更新触发
+        Task {
+            await service.fetchLinks(url: extracted)
+            if let result = service.result {
+                saveToHistory(url: extracted, title: result.title, artist: result.artist)
             }
         }
+    }
+
+    /// 从任意文本中提取第一个 http/https URL
+    private func extractURL(from text: String) -> String? {
+        let range = NSRange(text.startIndex..., in: text)
+        let match = ContentView.urlDetector?.firstMatch(in: text, options: [], range: range)
+        guard let result = match, let url = result.url else { return nil }
+        return url.absoluteString
     }
 
     private func selectTheme(_ newTheme: AppTheme) {
@@ -519,17 +534,17 @@ struct ContentView: View {
         }
     }
 
-    private let supportedPlatforms = [
-        (name: "Spotify", color: "#1DB954"),
-        (name: "Apple Music", color: "#FC3C44"),
-        (name: "YouTube Music", color: "#FF0000"),
-        (name: "网易云音乐", color: "#E60026"),
-        (name: "QQ 音乐", color: "#31C27C"),
-        (name: "Tidal", color: "#7B68EE"),
-        (name: "Deezer", color: "#A238FF"),
-        (name: "Amazon Music", color: "#00A8E1"),
-        (name: "SoundCloud", color: "#FF5500"),
-        (name: "Pandora", color: "#3668FF"),
+    private let supportedPlatforms: [(name: String, color: Color)] = [
+        (name: "Spotify",       color: Color(.sRGB, red: 0.114, green: 0.725, blue: 0.329)),
+        (name: "Apple Music",   color: Color(.sRGB, red: 0.988, green: 0.235, blue: 0.267)),
+        (name: "YouTube Music", color: Color(.sRGB, red: 1.0,   green: 0.0,   blue: 0.0)),
+        (name: "网易云音乐",      color: Color(.sRGB, red: 0.902, green: 0.0,   blue: 0.149)),
+        (name: "QQ 音乐",        color: Color(.sRGB, red: 0.192, green: 0.761, blue: 0.486)),
+        (name: "Tidal",         color: Color(.sRGB, red: 0.482, green: 0.408, blue: 0.933)),
+        (name: "Deezer",        color: Color(.sRGB, red: 0.635, green: 0.220, blue: 1.0)),
+        (name: "Amazon Music",  color: Color(.sRGB, red: 0.0,   green: 0.659, blue: 0.882)),
+        (name: "SoundCloud",    color: Color(.sRGB, red: 1.0,   green: 0.333, blue: 0.0)),
+        (name: "Pandora",       color: Color(.sRGB, red: 0.212, green: 0.408, blue: 1.0)),
     ]
 }
 
@@ -539,10 +554,19 @@ struct APISettingsSheet: View {
     @Binding var isPresented: Bool
     let service: OdesliService
     @EnvironmentObject var languageManager: LanguageManager
+    @State private var cnMode: Bool = true
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Toggle("CN 模式", isOn: $cnMode)
+                } header: {
+                    Text("地区设置")
+                } footer: {
+                    Text("开启后 Apple Music 链接将转为中国区（music.apple.com/cn/）。关闭则保留原始地区链接。")
+                }
+
                 Section {
                     TextField("https://your-api.com", text: $neteaseAPIURL)
                         .autocorrectionDisabled()
@@ -554,14 +578,18 @@ struct APISettingsSheet: View {
                     Text("可选功能。留空则使用搜索链接（默认，推荐）。\n填入地址后可获取精确歌曲链接。\n\n当前状态：\(service.isNeteaseAPIEnabled ? "已启用 API 模式" : "使用搜索链接")")
                 }
             }
-            .navigationTitle("API 设置")
+            .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                cnMode = service.isCNMode
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { isPresented = false }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
+                        service.isCNMode = cnMode
                         service.setNeteaseAPIBaseURL(neteaseAPIURL)
                         isPresented = false
                     }
