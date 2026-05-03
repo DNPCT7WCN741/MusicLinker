@@ -398,6 +398,3 @@ MIT License - 详见 LICENSE 文件
 - 联系开发者
 
 ---
-
-<p align="center">Made with ❤️ and SwiftUI</p>
-- [ ] 国产平台直接支持（网易云 / QQ 音乐/酷狗音乐官方 API，需申请 Key）
