@@ -123,15 +123,16 @@ struct ContentView: View {
     private var headerView: some View {
         VStack(spacing: 6) {
             HStack(spacing: 10) {
-                Text("MusicLinker")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [theme.textPrimary, theme.accent],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
+                // ⚠️ foregroundStyle(LinearGradient) 在 iOS Debug 模式下需要编译自定义 Metal shader
+                // 改为两个纯色 Text 拼接，视觉一致，零 Metal 编译开销
+                HStack(spacing: 0) {
+                    Text("Music")
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .foregroundColor(theme.textPrimary)
+                    Text("Linker")
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .foregroundColor(theme.accent)
+                }
 
                 Spacer()
 
@@ -312,7 +313,7 @@ struct ContentView: View {
                         )
                 }
 
-                Button(action: search) {
+                Button(action: searchButtonTapped) {
                     Label(languageManager.translate("button.search"), systemImage: "magnifyingglass")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(theme.textPrimary)
@@ -440,6 +441,18 @@ struct ContentView: View {
         }
     }
     
+    private func searchButtonTapped() {
+        if isInputFocused {
+            isInputFocused = false
+            Task {
+                await Task.yield()
+                search()
+            }
+        } else {
+            search()
+        }
+    }
+
     private func search() {
         guard !inputURL.isEmpty else { return }
         buttonFeedback()

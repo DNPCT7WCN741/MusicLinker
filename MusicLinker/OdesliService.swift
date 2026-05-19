@@ -208,23 +208,61 @@ class OdesliService: ObservableObject {
             return
         }
         
-        // 将中国区链接转换为美国区链接（提高跨平台映射成功率）
-        var processedURL = url
+        // Apple Music CN 链接：先转 US 区试，400 时回退 CN 原链
+        var candidateURLs: [String] = [url]
         if url.contains("music.apple.com/cn") {
-            processedURL = url.replacingOccurrences(of: "/cn/", with: "/us/")
-            print("🔄 检测到中国区 Apple Music 链接，转换为美国区: \(processedURL)")
+            let usURL = url.replacingOccurrences(of: "/cn/", with: "/us/")
+            candidateURLs = [usURL, url]   // US 优先，CN 备用
+            print("🔄 检测到中国区 Apple Music 链接，先尝试美国区: \(usURL)")
         } else if url.contains("geo.music.apple.com/cn") {
-            processedURL = url.replacingOccurrences(of: "geo.music.apple.com/cn", with: "music.apple.com/us")
-            print("🔄 检测到中国区 Apple Music 短链接，转换为美国区: \(processedURL)")
+            let usURL = url.replacingOccurrences(of: "geo.music.apple.com/cn", with: "music.apple.com/us")
+            candidateURLs = [usURL, url]
+            print("🔄 检测到中国区 Apple Music 短链接，先尝试美国区: \(usURL)")
         }
-        
-        guard let encodedURL = processedURL.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let requestURL = URL(string: "\(baseURL)?url=\(encodedURL)&userCountry=US&songIfSingle=true") else {
+
+        // URL 作为查询参数值时，必须编码 ?、&、=、# 等字符
+        var valueAllowed = CharacterSet.urlQueryAllowed
+        valueAllowed.remove(charactersIn: "?&=+#")
+
+        func buildOdesliURL(_ raw: String) -> URL? {
+            let decoded = raw.removingPercentEncoding ?? raw
+            guard let encoded = decoded.addingPercentEncoding(withAllowedCharacters: valueAllowed) else { return nil }
+            return URL(string: "\(baseURL)?url=\(encoded)&userCountry=US&songIfSingle=true")
+        }
+
+        // 依次尝试候选链接，首个 200 为准
+        var odesliData: Data? = nil
+        var processedURL = url
+        var lastStatusCode: Int = 0
+        for candidate in candidateURLs {
+            guard let requestURL = buildOdesliURL(candidate) else { continue }
+            print("🌐 正在请求 API: \(requestURL.absoluteString)")
+            if let (data, response) = try? await URLSession.shared.data(from: requestURL),
+               let http = response as? HTTPURLResponse {
+                print("✅ HTTP 状态码: \(http.statusCode)")
+                lastStatusCode = http.statusCode
+                if http.statusCode == 200 {
+                    odesliData = data
+                    processedURL = candidate
+                    break
+                } else {
+                    print("⚠️ \(candidate.contains("/us/") ? "美国区" : "原链接") 返回 \(http.statusCode)，继续尝试下一个...")
+                }
+            }
+        }
+
+        guard let finalData = odesliData else {
             await MainActor.run {
-                self.errorMessage = "无效的链接格式"
+                if lastStatusCode == 429 {
+                    self.errorMessage = "请求过于频繁，请稍等片刻再试（Odesli API 限速）"
+                } else {
+                    self.errorMessage = "无法找到这首歌的信息，请检查链接是否正确"
+                }
+                self.isLoading = false
             }
             return
         }
+        let _ = processedURL  // 供后续日志使用
 
         await MainActor.run {
             self.isLoading = true
@@ -233,23 +271,7 @@ class OdesliService: ObservableObject {
         }
 
         do {
-            print("🌐 正在请求 API: \(requestURL.absoluteString)")
-            let (data, response) = try await URLSession.shared.data(from: requestURL)
-
-            guard let httpResponse = response as? HTTPURLResponse else {
-                print("❌ 无效的 HTTP 响应")
-                throw URLError(.badServerResponse)
-            }
-
-            print("✅ HTTP 状态码: \(httpResponse.statusCode)")
-
-            guard httpResponse.statusCode == 200 else {
-                print("❌ HTTP 错误: \(httpResponse.statusCode)")
-                throw NSError(domain: "OdesliError", code: httpResponse.statusCode,
-                              userInfo: [NSLocalizedDescriptionKey: "无法找到这首歌的信息，请检查链接是否正确 (HTTP \(httpResponse.statusCode))"])
-            }
-
-            let odesliResponse = try JSONDecoder().decode(OdesliResponse.self, from: data)
+            let odesliResponse = try JSONDecoder().decode(OdesliResponse.self, from: finalData)
             var songResult = parseSongResult(from: odesliResponse)
             
             // 检查是否缺少关键平台（Spotify 或 Apple Music）
@@ -263,8 +285,8 @@ class OdesliService: ObservableObject {
                 print("⚠️ 缺少关键平台，尝试备用 API 补充...")
                 do {
                     if let backupLinks = try await fetchFromBackupAPI(
-                        url: processedURL, 
-                        title: songResult.title, 
+                        url: processedURL,
+                        title: songResult.title,
                         artist: songResult.artist,
                         missingSpotify: !hasSpotify,
                         missingAppleMusic: !hasAppleMusic
@@ -374,7 +396,10 @@ class OdesliService: ObservableObject {
             print("🎵 iTunes 找到链接，传给 Odesli...")
             
             // Step 4: 把 Apple Music 链接传给 Odesli 获取全平台结果
-            if let encodedAM = appleMusicURL.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+            let decodedAM1 = appleMusicURL.removingPercentEncoding ?? appleMusicURL
+            var amAllowed1 = CharacterSet.urlQueryAllowed
+            amAllowed1.remove(charactersIn: "?&=+#")
+            if let encodedAM = decodedAM1.addingPercentEncoding(withAllowedCharacters: amAllowed1),
                let requestURL = URL(string: "\(baseURL)?url=\(encodedAM)&userCountry=US&songIfSingle=true"),
                let (data, response) = try? await URLSession.shared.data(from: requestURL),
                let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
@@ -544,7 +569,10 @@ class OdesliService: ObservableObject {
             print("🎵 iTunes 找到链接: \(appleMusicURL)，传给 Odesli...")
             
             // Step 4: 把 Apple Music 链接传给 Odesli 获取全平台结果
-            if let encodedAM = appleMusicURL.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+            let decodedAM2 = appleMusicURL.removingPercentEncoding ?? appleMusicURL
+            var amAllowed2 = CharacterSet.urlQueryAllowed
+            amAllowed2.remove(charactersIn: "?&=+#")
+            if let encodedAM = decodedAM2.addingPercentEncoding(withAllowedCharacters: amAllowed2),
                let requestURL = URL(string: "\(baseURL)?url=\(encodedAM)&userCountry=US&songIfSingle=true"),
                let (data, response) = try? await URLSession.shared.data(from: requestURL),
                let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
@@ -615,9 +643,13 @@ class OdesliService: ObservableObject {
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let results = json["results"] as? [[String: Any]],
                let first = results.first,
-               let trackViewUrl = first["trackViewUrl"] as? String {
+               var trackViewUrl = first["trackViewUrl"] as? String {
                 // 去掉 uo= 参数，保留核心链接
-                let cleanURL = trackViewUrl.components(separatedBy: "&uo=").first ?? trackViewUrl
+                var cleanURL = trackViewUrl.components(separatedBy: "&uo=").first ?? trackViewUrl
+                
+                // 统一为 Apple Music（iTunes → Apple Music）
+                cleanURL = standardizeAppleMusicURL(cleanURL)
+                
                 print("✅ iTunes 找到: \(cleanURL)")
                 return cleanURL
             }
@@ -805,11 +837,18 @@ class OdesliService: ObservableObject {
             if let info = getPlatformInfo(for: key) {
                 // 检查是否已添加该平台（避免 appleMusic 和 itunes 重复）
                 if !addedPlatforms.contains(info.displayName) {
-                    // CN 模式下 Apple Music 链接转为中国区
                     var linkURL = platformData.url
+                    
+                    // Apple Music 链接标准化：所有 iTunes 格式转为 Apple Music（全局）
+                    if key == "appleMusic" || key == "itunes" {
+                        linkURL = standardizeAppleMusicURL(linkURL)
+                    }
+                    
+                    // CN 模式下转为中国区
                     if isCNMode && (key == "appleMusic" || key == "itunes") {
                         linkURL = convertAppleMusicToCN(linkURL)
                     }
+                    
                     links.append(AppPlatformLink(
                         platformKey: key,
                         displayName: info.displayName,
@@ -881,9 +920,11 @@ class OdesliService: ObservableObject {
     
     /// 将 Apple Music 链接转为中国区（/us/ → /cn/，或替换其他地区代码）
     private func convertAppleMusicToCN(_ url: String) -> String {
-        // 匹配 music.apple.com 或 itunes.apple.com 的地区代码并替换为 cn
-        var result = url
-        let regionPattern = #"((?:music|itunes)\.apple\.com/)([a-z]{2})(/)"#
+        // 先统一为 music.apple.com（iTunes → Apple Music）
+        var result = standardizeAppleMusicURL(url)
+        
+        // 匹配 music.apple.com 的地区代码并替换为 cn
+        let regionPattern = #"(music\.apple\.com/)([a-z]{2})(/)"#
         if let regex = try? NSRegularExpression(pattern: regionPattern),
            let match = regex.firstMatch(in: result, range: NSRange(result.startIndex..., in: result)),
            match.numberOfRanges == 4,
@@ -893,6 +934,17 @@ class OdesliService: ObservableObject {
             result = result.replacingCharacters(in: range, with: "\(prefix)cn\(suffix)")
         }
         return result
+    }
+    
+    /// 统一将 iTunes 链接转换为 Apple Music 格式（全局方法）
+    private func standardizeAppleMusicURL(_ url: String) -> String {
+        // 使用正则匹配任何 iTunes 域名并替换为 Apple Music
+        let pattern = #"itunes\.apple\.com"#
+        if let regex = try? NSRegularExpression(pattern: pattern) {
+            let range = NSRange(url.startIndex..., in: url)
+            return regex.stringByReplacingMatches(in: url, options: [], range: range, withTemplate: "music.apple.com")
+        }
+        return url.replacingOccurrences(of: "itunes.apple.com", with: "music.apple.com")
     }
 
     // MARK: - 备用 API（使用多个来源）
@@ -1196,15 +1248,16 @@ class OdesliService: ObservableObject {
             }
         }
         
-        // 如果是 Apple Music 链接
-        if url.contains("music.apple.com") || url.contains("geo.music.apple.com") {
-            // Apple Music 链接已知
+        // 如果是 Apple Music 或 iTunes 链接
+        if url.contains("music.apple.com") || url.contains("geo.music.apple.com") || url.contains("itunes.apple.com") {
+            var appleMusicUrl = standardizeAppleMusicURL(url)
+            
             links.append(AppPlatformLink(
                 platformKey: "appleMusic",
                 displayName: "Apple Music",
                 iconName: "applemusic.icon",
                 accentColor: "#FC3C44",
-                url: url,
+                url: appleMusicUrl,
                 nativeUrl: nil
             ))
             print("✅ 从 URL 提取: Apple Music")
@@ -1341,7 +1394,10 @@ class OdesliService: ObservableObject {
             // Apple Music
             if let appleMusicData = links["appleMusic"] as? [[String: Any]],
                let firstApple = appleMusicData.first,
-               let appleUrl = firstApple["link"] as? String {
+               var appleUrl = firstApple["link"] as? String {
+                // 统一为 Apple Music（iTunes → Apple Music）
+                appleUrl = standardizeAppleMusicURL(appleUrl)
+                
                 backupLinks.append(AppPlatformLink(
                     platformKey: "appleMusic",
                     displayName: "Apple Music",

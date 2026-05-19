@@ -204,6 +204,14 @@ enum AppTheme: String, CaseIterable, Codable {
     }
 }
 
+enum PosterMode {
+    case cover, lyrics
+}
+
+enum PosterStyle {
+    case pure, dynamic
+}
+
 struct ResultView: View {
     let result: SongResult
     let theme: AppTheme
@@ -225,6 +233,12 @@ struct ResultView: View {
     @State private var audioPlayer: AVPlayer? = nil
     @State private var errorMessage: String? = nil
     @State private var lastFmCoverUrl: String?
+    @State private var posterMode: PosterMode = .cover
+    @State private var posterStyle: PosterStyle = .dynamic
+    @State private var featuredLyric: String = ""
+    @State private var featuredKeyPhrase: String = ""
+    @State private var isLoadingLyrics: Bool = false
+    @State private var isInstrumental: Bool = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -251,7 +265,7 @@ struct ResultView: View {
                 ForEach(result.platforms) { platform in
                     PlatformLinkRow(
                         platform: platform,
-                        isCopied: copiedURL == platform.url,
+                        isCopied: copiedURL == standardizeAppleMusicURL(platform.url),
                         theme: theme,
                         onOpen: { openURL(platform.nativeUrl ?? platform.url) },
                         onCopy: { copyURL(platform.url) }
@@ -477,11 +491,83 @@ struct ResultView: View {
     }
 
     private var posterPreview: some View {
-        posterCard
-            .aspectRatio(9.0 / 16.0, contentMode: .fit)
-            .frame(width: 280)
-            .clipShape(RoundedRectangle(cornerRadius: 22))
-            .shadow(color: Color.black.opacity(0.25), radius: 20, x: 0, y: 10)
+        VStack(alignment: .leading, spacing: 10) {
+            // 按钮行：Cover/Lyrics 胶囊 + Pure/Dynamic 胶囊
+            HStack(spacing: 8) {
+                // Cover / Lyrics
+                HStack(spacing: 0) {
+                    Button(action: { posterMode = .cover }) {
+                        Text("Cover")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(posterMode == .cover ? theme.surface : theme.textSecondary)
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 12)
+                            .background(posterMode == .cover ? theme.textPrimary : Color.clear)
+                            .clipShape(Capsule())
+                    }
+                    Button(action: {
+                        posterMode = .lyrics
+                        if featuredLyric.isEmpty && !isLoadingLyrics {
+                            isLoadingLyrics = true
+                            Task { await loadFeaturedLyric() }
+                        }
+                    }) {
+                        HStack(spacing: 4) {
+                            if isLoadingLyrics { ProgressView().progressViewStyle(CircularProgressViewStyle(tint: theme.textSecondary)).scaleEffect(0.6) }
+                            Text("Lyrics")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(posterMode == .lyrics ? theme.surface : theme.textSecondary)
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 12)
+                        .background(posterMode == .lyrics ? theme.textPrimary : Color.clear)
+                        .clipShape(Capsule())
+                    }
+                }
+                .background(Capsule().fill(theme.surfaceAlt))
+
+                // Pure / Dynamic
+                HStack(spacing: 0) {
+                    Button(action: { posterStyle = .pure }) {
+                        Text("Pure")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(posterStyle == .pure ? theme.surface : theme.textSecondary)
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 12)
+                            .background(posterStyle == .pure ? theme.textPrimary : Color.clear)
+                            .clipShape(Capsule())
+                    }
+                    Button(action: { posterStyle = .dynamic }) {
+                        Text("Dynamic")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(posterStyle == .dynamic ? theme.surface : theme.textSecondary)
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 12)
+                            .background(posterStyle == .dynamic ? theme.textPrimary : Color.clear)
+                            .clipShape(Capsule())
+                    }
+                }
+                .background(Capsule().fill(theme.surfaceAlt))
+            }
+
+            // 海报卡片（居中展示）
+            HStack {
+                Spacer()
+                Group {
+                    if posterMode == .cover {
+                        posterCard
+                    } else {
+                        lyricsPosterCard
+                    }
+                }
+                .aspectRatio(9.0 / 16.0, contentMode: .fit)
+                .frame(width: 280)
+                .clipShape(RoundedRectangle(cornerRadius: 22))
+                .shadow(color: Color.black.opacity(0.25), radius: 20, x: 0, y: 10)
+                Spacer()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var posterCard: some View {
@@ -494,9 +580,19 @@ struct ResultView: View {
             let stripHeight = h * 0.12
 
             ZStack(alignment: .bottom) {
-                // 背景主色
-                dominantColor
-                    .ignoresSafeArea()
+                // 背景：Pure=纯色，Dynamic=渐变
+                Group {
+                    if posterStyle == .dynamic {
+                        LinearGradient(
+                            colors: [dominantColor, secondaryColor.opacity(0.55), dominantColor.opacity(0.85)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    } else {
+                        LinearGradient(colors: [dominantColor, dominantColor], startPoint: .top, endPoint: .bottom)
+                    }
+                }
+                .ignoresSafeArea()
 
                 // 封面图
                 Group {
@@ -526,7 +622,7 @@ struct ResultView: View {
                     HStack {
                         Text(result.title)
                             .font(.system(size: w * 0.09, weight: .bold))
-                            .foregroundColor(dominantColor)
+                            .foregroundColor(posterStyle == .dynamic ? Color.white : dominantColor)
                             .lineLimit(1)
                             .minimumScaleFactor(0.5)
                             .padding(.leading, hPad)
@@ -534,35 +630,159 @@ struct ResultView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: stripHeight)
-                    .background(secondaryColor)
+                    .background(posterStyle == .dynamic ? Color.black.opacity(0.28) : secondaryColor)
 
                     // 第二条：专辑名 + 歌手
                     HStack {
                         Text(result.album ?? "")
                             .font(.system(size: w * 0.075, weight: .bold))
-                            .foregroundColor(dominantColor)
+                            .foregroundColor(posterStyle == .dynamic ? Color.white.opacity(0.85) : dominantColor)
                             .lineLimit(1)
                             .minimumScaleFactor(0.5)
                             .padding(.leading, hPad)
                         Spacer()
                         Text(result.artist)
                             .font(.system(size: w * 0.06, weight: .semibold))
-                            .foregroundColor(dominantColor)
+                            .foregroundColor(posterStyle == .dynamic ? Color.white.opacity(0.85) : dominantColor)
                             .lineLimit(1)
                             .minimumScaleFactor(0.5)
                             .padding(.trailing, hPad)
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: stripHeight)
-                    .background(tertiaryColor)
+                    .background(posterStyle == .dynamic ? Color.black.opacity(0.18) : tertiaryColor)
 
                     // 底部留白，和色带等高
-                    dominantColor
-                        .frame(height: stripHeight)
+                    if posterStyle == .dynamic {
+                        Color.clear.frame(height: stripHeight)
+                    } else {
+                        dominantColor.frame(height: stripHeight)
+                    }
                 }
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 42))
+    }
+
+    // MARK: - Lyrics Poster Card
+    private var lyricsPosterCard: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let hPad = w * 0.10
+
+            ZStack {
+                // 背景：Pure=纯色，Dynamic=渐变
+                Group {
+                    if posterStyle == .dynamic {
+                        LinearGradient(
+                            colors: [dominantColor, secondaryColor.opacity(0.55), dominantColor.opacity(0.85)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    } else {
+                        LinearGradient(colors: [dominantColor, dominantColor], startPoint: .top, endPoint: .bottom)
+                    }
+                }
+                .ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    Spacer()
+
+                    // 大引号装饰
+                    HStack {
+                        Text("\u{201C}")
+                            .font(.system(size: w * 0.32, weight: .black, design: .serif))
+                            .foregroundColor(secondaryColor.opacity(0.6))
+                            .offset(y: w * 0.08)
+                        Spacer()
+                    }
+                    .padding(.leading, hPad * 0.5)
+
+                    // 歌词区域：关键词在行内放大，其余正常
+                    if isInstrumental {
+                        Text("此刻无需言语")
+                            .font(.system(size: w * 0.065, weight: .bold, design: .default))
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, hPad)
+                    } else {
+                        let displayLyric = featuredLyric.isEmpty ? result.title : featuredLyric
+                        Text(buildLyricAttributedString(lyric: displayLyric, keyPhrase: featuredKeyPhrase, baseSize: w * 0.058))
+                            .lineSpacing(w * 0.022)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, hPad)
+                    }
+
+                    // 右引号
+                    HStack {
+                        Spacer()
+                        Text("\u{201D}")
+                            .font(.system(size: w * 0.32, weight: .black, design: .serif))
+                            .foregroundColor(secondaryColor.opacity(0.6))
+                            .offset(y: -(w * 0.08))
+                    }
+                    .padding(.trailing, hPad * 0.5)
+
+                    Spacer()
+
+                    // 分隔线
+                    Rectangle()
+                        .fill(secondaryColor.opacity(0.5))
+                        .frame(height: 1)
+                        .padding(.horizontal, hPad)
+                        .padding(.bottom, h * 0.03)
+
+                    // 底部：小封面 + 歌名 + 艺术家
+                    HStack(spacing: w * 0.04) {
+                        // 小封面缩略图
+                        Group {
+                            if let uiImage = coverUIImage {
+                                Image(uiImage: uiImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                            } else {
+                                tertiaryColor
+                            }
+                        }
+                        .frame(width: w * 0.13, height: w * 0.13)
+                        .clipShape(RoundedRectangle(cornerRadius: w * 0.025))
+
+                        VStack(alignment: .leading, spacing: w * 0.01) {
+                            Text(result.title)
+                                .font(.system(size: w * 0.058, weight: .bold))
+                                .foregroundColor(Color.white)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                            Text(result.artist)
+                                .font(.system(size: w * 0.046, weight: .regular))
+                                .foregroundColor(Color.white.opacity(0.65))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, hPad)
+                    .padding(.bottom, h * 0.06)
+                }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 42))
+    }
+
+    /// 构建歌词 AttributedString：关键字在行内放大加粗，其余正常
+    private func buildLyricAttributedString(lyric: String, keyPhrase: String, baseSize: CGFloat) -> AttributedString {
+        var attributed = AttributedString(lyric)
+        attributed.font = .system(size: baseSize, weight: .bold)
+        attributed.foregroundColor = .white
+        if !keyPhrase.isEmpty,
+           let range = attributed.range(of: keyPhrase, options: .caseInsensitive) {
+            attributed[range].font = .system(size: baseSize * 1.6, weight: .black)
+        }
+        return attributed
     }
 
     private func labelChip(title: String, value: String) -> some View {
@@ -583,9 +803,12 @@ struct ResultView: View {
     private func renderPosterImage() -> UIImage? {
         let w: CGFloat = 1080
         let h: CGFloat = 1920
-        let content = posterCard
-            .frame(width: w, height: h)
-            .environment(\.displayScale, 1)
+        let content: AnyView
+        if posterMode == .lyrics {
+            content = AnyView(lyricsPosterCard.frame(width: w, height: h).environment(\.displayScale, 1))
+        } else {
+            content = AnyView(posterCard.frame(width: w, height: h).environment(\.displayScale, 1))
+        }
         let renderer = ImageRenderer(content: content)
         renderer.proposedSize = .init(width: w, height: h)
         renderer.scale = 1
@@ -774,7 +997,7 @@ struct ResultView: View {
     }
 
     private func copyAllPlatformLinksToClipboard() {
-        var linkText = result.platforms.map { "\($0.displayName)：\($0.url)" }.joined(separator: "\n")
+        var linkText = result.platforms.map { "\($0.displayName)：\(standardizeAppleMusicURL($0.url))" }.joined(separator: "\n")
         linkText += "\n\nsong.link：\(result.songLinkUrl)"
         UIPasteboard.general.string = linkText
     }
@@ -794,6 +1017,363 @@ struct ResultView: View {
                 tertiaryColor = colors[2]
             }
         } catch {}
+    }
+
+    // MARK: - 歌词获取：从网易云拿 LRC，重复行检测找副歌/hook
+    private func loadFeaturedLyric() async {
+        defer { Task { @MainActor in isLoadingLyrics = false } }
+
+        // 先从已有结果里找网易云链接，找不到则用歌名+艺术家搜索
+        var songId: String? = nil
+        if let neteaseLink = result.platforms.first(where: { $0.platformKey == "netease" || $0.displayName == "网易云音乐" }) {
+            songId = extractNeteaseSongId(from: neteaseLink.url)
+        }
+        if songId == nil || songId!.isEmpty {
+            print("🔍 结果里无网易云链接，搜索歌词用 song ID...")
+            songId = await searchNeteaseForSongId(title: result.title, artist: result.artist)
+        }
+        guard let finalSongId = songId, !finalSongId.isEmpty else {
+            print("❌ 无法获取 song ID，显示歌名")
+            await MainActor.run { featuredLyric = result.title }
+            return
+        }
+        print("🎵 loadFeaturedLyric songId=\(finalSongId)")
+
+        // 并行：歌词 + 热门评论（哪行 LRC 被热评引用最多 = 最火歌词）
+        async let lrcFetch    = fetchNeteaseLrc(songId: finalSongId)
+        async let commentFetch = fetchNeteaseHotComments(songId: finalSongId)
+        let (lrcText, hotComments) = await (lrcFetch, commentFetch)
+        print("💬 热评数=\(hotComments.count)，LRC=\(lrcText == nil ? "nil" : "\(lrcText!.count)chars")")
+
+        if lrcText == "__INSTRUMENTAL__" {
+            print("ℹ️ 纯音乐，显示无言语提示")
+            await MainActor.run { isInstrumental = true }
+            return
+        }
+        guard let lrc = lrcText else {
+            print("⚠️ LRC 为 nil，显示歌名")
+            await MainActor.run { featuredLyric = result.title }
+            return
+        }
+
+        let plainLines = plainLrcLines(from: lrc)
+
+        // 优先级 1：DeepSeek AI（Key 已配置时）
+        if let aiResult = await fetchFeaturedLyricFromAI(
+            title: result.title, artist: result.artist, lines: plainLines) {
+            await MainActor.run {
+                featuredLyric = aiResult.lyric
+                featuredKeyPhrase = aiResult.keyPhrase
+            }
+            return
+        }
+
+        // 优先级 2：热评匹配
+        if !hotComments.isEmpty, plainLines.count >= 3 {
+            outer: for comment in hotComments {
+                for (idx, line) in plainLines.enumerated() where line.count >= 5 {
+                    if comment.contains(line) {
+                        let start = max(0, min(idx, plainLines.count - 3))
+                        let block = plainLines[start ..< (start + 3)].joined(separator: "\n")
+                        await MainActor.run { featuredLyric = block }
+                        return
+                    }
+                }
+            }
+            print("💬 热评未匹配到歌词行，回退滑动窗口")
+        }
+
+        // 优先级 3：滑动窗口算法
+        let line = pickFeaturedLine(from: lrc)
+        await MainActor.run { featuredLyric = line }
+    }
+
+    // MARK: - Groq AI 歌词选取
+    /// 把完整歌词交给 Groq，让它找最打动人的连续 3 行
+    private func fetchFeaturedLyricFromAI(title: String, artist: String, lines: [String]) async -> (lyric: String, keyPhrase: String)? {
+        let deepseekAPIKey = "sk-57dbdb26f3f34954906921ebc45d2fbd"
+        guard !deepseekAPIKey.isEmpty else {
+            print("ℹ️ DeepSeek API Key 未配置，跳过")
+            return nil
+        }
+        guard lines.count >= 3 else { return nil }
+        guard let url = URL(string: "https://api.deepseek.com/v1/chat/completions") else { return nil }
+
+        let lyricsText = lines.joined(separator: "\n")
+        let systemPrompt = """
+        You are a music expert. Given song lyrics:
+        1. Find the most iconic and emotionally resonant consecutive 3 lines.
+        2. From those 3 lines, extract the single most powerful phrase (2-5 words max, must be a substring of one of the 3 lines).
+        Return in EXACTLY this format (no other text):
+        LINES:
+        [line1]
+        [line2]
+        [line3]
+        KEY:
+        [2-5 word key phrase]
+        """
+        let userPrompt = "Song: \(title) by \(artist)\n\nLyrics:\n\(lyricsText)"
+
+        let body: [String: Any] = [
+            "model": "deepseek-chat",
+            "messages": [
+                ["role": "system", "content": systemPrompt],
+                ["role": "user",   "content": userPrompt]
+            ],
+            "max_tokens": 150,
+            "temperature": 0.3
+        ]
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 10
+        req.setValue("Bearer \(deepseekAPIKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = bodyData
+
+        guard let (data, response) = try? await URLSession.shared.data(for: req),
+              let http = response as? HTTPURLResponse else {
+            print("❌ Groq 请求失败")
+            return nil
+        }
+        guard http.statusCode == 200 else {
+            print("⚠️ Groq HTTP \(http.statusCode)")
+            return nil
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let message = choices.first?["message"] as? [String: Any],
+              let content = message["content"] as? String else {
+            print("❌ Groq 响应解析失败")
+            return nil
+        }
+
+        // 清洗：去掉空行、引号，取前 3 行
+        let resultLines = content
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                      .trimmingCharacters(in: CharacterSet(charactersIn: "\"“”")) }
+            .filter { !$0.isEmpty }
+        // 解析 LINES: 和 KEY: 两段
+        var lyricLines: [String] = []
+        var keyPhrase: String = ""
+        var inLines = false, inKey = false
+        for raw in content.components(separatedBy: "\n") {
+            let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\u{22}\u{201C}\u{201D}"))
+            if t == "LINES:" { inLines = true; inKey = false; continue }
+            if t == "KEY:"   { inKey = true; inLines = false; continue }
+            if t.isEmpty { continue }
+            if inLines && lyricLines.count < 3 { lyricLines.append(t) }
+            else if inKey && keyPhrase.isEmpty { keyPhrase = t }
+        }
+        // fallback：如果格式不对，取前3行非标签行当歌词
+        if lyricLines.isEmpty {
+            lyricLines = content.components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && $0 != "LINES:" && $0 != "KEY:" }
+                .prefix(3).map { $0 }
+        }
+        guard !lyricLines.isEmpty else { return nil }
+        // 验证至少 1 行在原歌词里
+        let hasMatch = lyricLines.contains { aiLine in lines.contains { $0 == aiLine } }
+        if !hasMatch {
+            print("⚠️ DeepSeek 返回内容与歌词不匹配，放弃")
+            return nil
+        }
+        let lyric = lyricLines.joined(separator: "\n")
+        print("✨ DeepSeek 歌词: \(lyric.prefix(60))")
+        print("✨ DeepSeek 关键词: \(keyPhrase)")
+        return (lyric: lyric, keyPhrase: keyPhrase)
+    }
+
+    /// 提取干净的 LRC 文本行列表（去掉元数据行）
+    private func plainLrcLines(from lrc: String) -> [String] {
+        let pattern = #"^\[\d+:\d+(?:\.\d+)?\](.*)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        var lines: [String] = []
+        for raw in lrc.components(separatedBy: "\n") {
+            let ns = raw as NSString
+            let rng = NSRange(location: 0, length: ns.length)
+            guard let m = regex.firstMatch(in: raw, range: rng), m.numberOfRanges >= 2 else { continue }
+            let text = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard text.count >= 3 && text.count <= 60,
+                  !text.hasPrefix("作词"), !text.hasPrefix("作曲"),
+                  !text.hasPrefix("编曲"), !text.hasPrefix("制作"),
+                  !text.hasPrefix("//"), !text.hasPrefix("【") else { continue }
+            lines.append(text)
+        }
+        return lines
+    }
+
+    /// 用歌名+艺术家搜索网易云，返回 song ID 字符串
+    private func searchNeteaseForSongId(title: String, artist: String) async -> String? {
+        let query = "\(title) \(artist)"
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://music.163.com/api/search/get?s=\(encoded)&type=1&limit=5&offset=0") else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        req.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
+        req.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let resultObj = json["result"] as? [String: Any],
+              let songs = resultObj["songs"] as? [[String: Any]], !songs.isEmpty else { return nil }
+        // 优先艺术家名匹配
+        let artistLower = artist.lowercased()
+        var best = songs[0]
+        for song in songs {
+            let names = (song["artists"] as? [[String: Any]] ?? [])
+                .compactMap { $0["name"] as? String }.joined(separator: " ").lowercased()
+            if !artistLower.isEmpty && names.contains(artistLower) { best = song; break }
+        }
+        guard let id = best["id"] as? Int else { return nil }
+        print("✅ 搜索到网易云 song ID: \(id) for \(title)")
+        return String(id)
+    }
+
+    /// 获取网易云 LRC 原始文本
+    private func fetchNeteaseLrc(songId: String) async -> String? {
+        // 先试 lv=-1（最佳质量），若返回空再试 lv=1
+        if let lrc = await fetchNeteaseLrcWithVersion(songId: songId, lv: "-1"), !lrc.isEmpty {
+            return lrc
+        }
+        print("⚠️ lv=-1 无结果，回退 lv=1")
+        return await fetchNeteaseLrcWithVersion(songId: songId, lv: "1")
+    }
+
+    private func fetchNeteaseLrcWithVersion(songId: String, lv: String) async -> String? {
+        guard let url = URL(string: "https://music.163.com/api/song/lyric?id=\(songId)&lv=\(lv)") else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        req.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
+        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+        guard let (data, response) = try? await URLSession.shared.data(for: req) else {
+            print("❌ LRC 请求失败 songId=\(songId) lv=\(lv)")
+            return nil
+        }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+        print("🎵 LRC HTTP \(status) songId=\(songId) lv=\(lv) bytes=\(data.count)")
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            print("❌ LRC JSON 解析失败")
+            return nil
+        }
+        // 检查网易云返回的 code 字段
+        if let code = json["code"] as? Int, code != 200 {
+            print("⚠️ LRC API code=\(code) lv=\(lv)")
+            return nil
+        }
+        if let nolyric = json["nolyric"] as? Bool, nolyric {
+            print("ℹ️ 该歌曲无歌词 (nolyric=true)")
+            return "__INSTRUMENTAL__"
+        }
+        if let uncollected = json["uncollected"] as? Bool, uncollected {
+            print("ℹ️ 该歌曲歌词未收录")
+            return nil
+        }
+        guard let lrc = (json["lrc"] as? [String: Any])?["lyric"] as? String,
+              !lrc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            print("⚠️ LRC lyric 字段为空 lv=\(lv)")
+            return nil
+        }
+        print("✅ LRC 获取成功，长度=\(lrc.count) lv=\(lv)")
+        return lrc
+    }
+
+    /// 获取网易云热门评论（取 Top 5 content 字段）
+    private func fetchNeteaseHotComments(songId: String) async -> [String] {
+        let urlStr = "https://music.163.com/api/comment/hot?id=\(songId)&type=0&offset=0&total=false&limit=5"
+        guard let url = URL(string: urlStr) else { return [] }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        req.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
+        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
+        // 检查 code 字段
+        if let code = json["code"] as? Int, code != 200 {
+            print("⚠️ 热评 API code=\(code)")
+            return []
+        }
+        guard let hot = json["hotComments"] as? [[String: Any]] else { return [] }
+        let comments = hot.compactMap { $0["content"] as? String }
+        print("💬 获取到热评 \(comments.count) 条")
+        return comments
+    }
+
+    /// LRC 解析 → 3行滑动窗口找副歌块（副歌是整块重复，不是单行重复）
+    private func pickFeaturedLine(from lrc: String) -> String {
+        // 1. 解析 LRC，提取 (时间戳秒数, 歌词文本)
+        let pattern = #"^\[(\d+):(\d+(?:\.\d+)?)\](.*)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return result.title }
+
+        struct LLine { let time: Double; let text: String }
+        var all: [LLine] = []
+
+        for raw in lrc.components(separatedBy: "\n") {
+            let ns = raw as NSString
+            let rng = NSRange(location: 0, length: ns.length)
+            guard let m = regex.firstMatch(in: raw, range: rng), m.numberOfRanges >= 4 else { continue }
+            let min  = Double(ns.substring(with: m.range(at: 1))) ?? 0
+            let sec  = Double(ns.substring(with: m.range(at: 2))) ?? 0
+            let text = ns.substring(with: m.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
+            let len  = text.count
+            guard len >= 3 && len <= 60,
+                  !text.hasPrefix("作词"), !text.hasPrefix("作曲"),
+                  !text.hasPrefix("编曲"), !text.hasPrefix("制作"),
+                  !text.hasPrefix("//"), !text.hasPrefix("【") else { continue }
+            all.append(LLine(time: min * 60 + sec, text: text))
+        }
+
+        guard all.count >= 3 else {
+            return all.isEmpty ? result.title : all.map(\.text).joined(separator: "\n")
+        }
+
+        // 2. 3行滑动窗口：副歌是整块重复，找出现次数最多的3行组合
+        var winFreq: [String: (count: Int, idx: Int)] = [:]
+        for i in 0...(all.count - 3) {
+            let key = [all[i].text, all[i+1].text, all[i+2].text].joined(separator: "\n")
+            if winFreq[key] == nil { winFreq[key] = (1, i) }
+            else { winFreq[key]!.count += 1 }
+        }
+        if let best = winFreq.max(by: { $0.value.count < $1.value.count }), best.value.count >= 2 {
+            return best.key   // 命中！这就是副歌
+        }
+
+        // 3. 没有重复块 → 回退到单行重复，然后取锚点前后共3行
+        var lineFreq: [String: Int] = [:]
+        for l in all { lineFreq[l.text, default: 0] += 1 }
+        if let bestLine = lineFreq.max(by: { $0.value < $1.value }), bestLine.value >= 2,
+           let anchorIdx = all.firstIndex(where: { $0.text == bestLine.key }) {
+            let start = max(0, min(anchorIdx, all.count - 3))
+            return all[start..<(start + 3)].map(\.text).joined(separator: "\n")
+        }
+
+        // 4. 完全没有重复 → 用时间戳找 42% 位置（流行歌副歌通常在这里）
+        let totalTime = all.last!.time
+        if totalTime > 0 {
+            let target = totalTime * 0.42
+            let anchor = all.enumerated()
+                .min(by: { abs($0.element.time - target) < abs($1.element.time - target) })?.offset
+                ?? (all.count / 2)
+            let start = max(0, min(anchor, all.count - 3))
+            return all[start..<(start + 3)].map(\.text).joined(separator: "\n")
+        }
+
+        // 最终保险
+        let start = max(0, all.count / 2 - 1)
+        return all[start..<(start + 3)].map(\.text).joined(separator: "\n")
+    }
+
+    private func extractNeteaseSongId(from url: String) -> String? {
+        guard let range = url.range(of: "id=") else { return nil }
+        let after = url[range.upperBound...]
+        var id = ""
+        for ch in after {
+            if ch.isNumber { id.append(ch) } else { break }
+        }
+        return id.isEmpty ? nil : id
     }
 
     private var songLinkButton: some View {
@@ -820,13 +1400,15 @@ struct ResultView: View {
 
     private func openURL(_ urlString: String) {
         buttonFeedback()
-        guard let url = URL(string: urlString) else { return }
+        let standardizedURL = standardizeAppleMusicURL(urlString)
+        guard let url = URL(string: standardizedURL) else { return }
         UIApplication.shared.open(url)
     }
 
     private func copyURL(_ urlString: String) {
         buttonFeedback()
-        UIPasteboard.general.string = urlString
+        let standardizedURL = standardizeAppleMusicURL(urlString)
+        UIPasteboard.general.string = standardizedURL
         withAnimation(.spring(response: 0.3)) {
             copiedURL = urlString
         }
@@ -835,6 +1417,12 @@ struct ResultView: View {
                 copiedURL = nil
             }
         }
+    }
+
+    /// 统一将 iTunes 链接转换为 Apple Music 格式（全局方法）
+    private func standardizeAppleMusicURL(_ url: String) -> String {
+        // 使用 replacingOccurrences 将 iTunes 域名转换为 Apple Music
+        return url.replacingOccurrences(of: "itunes.apple.com", with: "music.apple.com")
     }
 
     private func buttonFeedback() {
