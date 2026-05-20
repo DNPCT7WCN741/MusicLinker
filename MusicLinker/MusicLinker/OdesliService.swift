@@ -149,6 +149,7 @@ class OdesliService: ObservableObject {
 
     private let baseURL = "https://api.song.link/v1-alpha.1/links"
     private let songwhipURL = "https://songwhip.com/"
+    private let defaultTimeout: TimeInterval = 8.0
 
     // CN 模式：Apple Music 链接转为中国区
     var isCNMode: Bool {
@@ -237,7 +238,7 @@ class OdesliService: ObservableObject {
         for candidate in candidateURLs {
             guard let requestURL = buildOdesliURL(candidate) else { continue }
             print("🌐 正在请求 API: \(requestURL.absoluteString)")
-            if let (data, response) = try? await URLSession.shared.data(from: requestURL),
+            if let (data, response) = try? await data(from: requestURL),
                let http = response as? HTTPURLResponse {
                 print("✅ HTTP 状态码: \(http.statusCode)")
                 lastStatusCode = http.statusCode
@@ -401,7 +402,7 @@ class OdesliService: ObservableObject {
             amAllowed1.remove(charactersIn: "?&=+#")
             if let encodedAM = decodedAM1.addingPercentEncoding(withAllowedCharacters: amAllowed1),
                let requestURL = URL(string: "\(baseURL)?url=\(encodedAM)&userCountry=US&songIfSingle=true"),
-               let (data, response) = try? await URLSession.shared.data(from: requestURL),
+               let (data, response) = try? await data(from: requestURL),
                let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
                let odesliResponse = try? JSONDecoder().decode(OdesliResponse.self, from: data) {
                 
@@ -574,11 +575,11 @@ class OdesliService: ObservableObject {
             amAllowed2.remove(charactersIn: "?&=+#")
             if let encodedAM = decodedAM2.addingPercentEncoding(withAllowedCharacters: amAllowed2),
                let requestURL = URL(string: "\(baseURL)?url=\(encodedAM)&userCountry=US&songIfSingle=true"),
-               let (data, response) = try? await URLSession.shared.data(from: requestURL),
+               let (data, response) = try? await data(from: requestURL),
                let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
                let odesliResponse = try? JSONDecoder().decode(OdesliResponse.self, from: data) {
                 
-                var songResult = parseSongResult(from: odesliResponse)
+                let songResult = parseSongResult(from: odesliResponse)
                 
                 // 插入精确的网易云链接
                 let neteaseLink = AppPlatformLink(
@@ -643,7 +644,7 @@ class OdesliService: ObservableObject {
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let results = json["results"] as? [[String: Any]],
                let first = results.first,
-               var trackViewUrl = first["trackViewUrl"] as? String {
+               let trackViewUrl = first["trackViewUrl"] as? String {
                 // 去掉 uo= 参数，保留核心链接
                 var cleanURL = trackViewUrl.components(separatedBy: "&uo=").first ?? trackViewUrl
                 
@@ -1250,7 +1251,7 @@ class OdesliService: ObservableObject {
         
         // 如果是 Apple Music 或 iTunes 链接
         if url.contains("music.apple.com") || url.contains("geo.music.apple.com") || url.contains("itunes.apple.com") {
-            var appleMusicUrl = standardizeAppleMusicURL(url)
+            let appleMusicUrl = standardizeAppleMusicURL(url)
             
             links.append(AppPlatformLink(
                 platformKey: "appleMusic",
@@ -1463,6 +1464,12 @@ class OdesliService: ObservableObject {
             platforms: allLinks
         )
     }
+
+    private func data(from url: URL, timeout: TimeInterval? = nil) async throws -> (Data, URLResponse) {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = timeout ?? defaultTimeout
+        return try await URLSession.shared.data(for: request)
+    }
 }
 
 // MARK: - Song Result Model
@@ -1514,6 +1521,7 @@ private class RedirectCapturer: NSObject, URLSessionTaskDelegate, URLSessionData
         print("🔄 重定向解析: \(originalURL) → \(finalURL)")
         continuation.resume(returning: finalURL)
         completionHandler(nil) // 阻止继续跟随
+        session.invalidateAndCancel()
         task.cancel()
     }
 
@@ -1522,6 +1530,7 @@ private class RedirectCapturer: NSObject, URLSessionTaskDelegate, URLSessionData
         resumed = true
         // 没有发生重定向（或取消），返回 nil 让调用方处理
         continuation.resume(returning: nil)
+        session.invalidateAndCancel()
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {

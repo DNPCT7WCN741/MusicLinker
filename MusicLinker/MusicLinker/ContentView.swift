@@ -38,6 +38,8 @@ struct SearchHistoryItem: Identifiable, Codable {
 struct ContentView: View {
     // 静态缓存：NSDataDetector 编译成本高，只需构建一次
     private static let urlDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    private static let scrollTopID = "contentScrollTop"
+    private static let startupDelayNanoseconds: UInt64 = 120_000_000
     @StateObject private var service = OdesliService()
     @EnvironmentObject var languageManager: LanguageManager
     
@@ -53,70 +55,117 @@ struct ContentView: View {
     @State private var isShowingLanguageMenu = false
     @State private var isShowingAPISettings = false
     @State private var neteaseAPIURL = ""
+    @State private var hasStartedStartupSequence = false
+    @State private var isStartupContentReady = false
 
     var body: some View {
         NavigationStack {
             ZStack {
-                LinearGradient(
-                    colors: theme.backgroundColors,
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+                startupBackground
                 .ignoresSafeArea()
 
-                VStack(spacing: 0) {
-                    headerView
-                        .padding(.top, 20)
+                ScrollViewReader { scrollProxy in
+                    VStack(spacing: 0) {
+                        headerView
+                            .padding(.top, 20)
 
-                    ScrollView {
-                        VStack(spacing: 24) {
-                            searchCard
+                        ScrollView {
+                            Color.clear
+                                .frame(height: 0)
+                                .id(Self.scrollTopID)
 
-                            if service.isLoading {
-                                loadingView
-                            } else if let error = service.errorMessage {
-                                errorView(message: error)
-                            } else if let result = service.result {
-                                ResultView(result: result, theme: theme)
-                                    .transition(.asymmetric(
-                                        insertion: .move(edge: .bottom).combined(with: .opacity),
-                                        removal: .opacity
-                                    ))
-                            } else {
-                                placeholderView
+                            VStack(spacing: 24) {
+                                searchCard
+
+                                if service.isLoading {
+                                    loadingView
+                                } else if let error = service.errorMessage {
+                                    errorView(message: error)
+                                } else if let result = service.result {
+                                    ResultView(result: result, theme: theme)
+                                        .transition(.asymmetric(
+                                            insertion: .move(edge: .bottom).combined(with: .opacity),
+                                            removal: .opacity
+                                        ))
+                                } else if !isStartupContentReady {
+                                    Color.clear
+                                        .frame(height: 1)
+                                } else {
+                                    placeholderView
+                                        .transition(.opacity)
+                                }
                             }
+                            .padding(.horizontal, 20)
+                            .padding(.bottom, 40)
                         }
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 40)
+                        .scrollDismissesKeyboard(.interactively)
                     }
-                    .scrollDismissesKeyboard(.interactively)
+                    .overlay(alignment: .top) {
+                        scrollToTopTapTarget {
+                            scrollToTop(using: scrollProxy)
+                        }
+                    }
                 }
             }
             .background(
-                ZStack {
-                    // RadialGradient 无需 Metal shader 编译，冷启动更快
-                    RadialGradient(
-                        colors: [theme.accent.opacity(0.22), Color.clear],
-                        center: UnitPoint(x: 0.15, y: 0.42),
-                        startRadius: 0,
-                        endRadius: 220
-                    )
-                    RadialGradient(
-                        colors: [theme.accentSecondary.opacity(0.18), Color.clear],
-                        center: UnitPoint(x: 0.88, y: 0.82),
-                        startRadius: 0,
-                        endRadius: 190
-                    )
-                }
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
+                startupDecoration
             )
             .navigationBarHidden(true)
         }
         .preferredColorScheme(theme.preferredColorScheme)
         .onAppear {
-            loadThemePreference()
-            loadHistoryFromStorage()
+            startStartupSequenceIfNeeded()
+        }
+    }
+
+    @ViewBuilder
+    private var startupBackground: some View {
+        if isStartupContentReady {
+            LinearGradient(
+                colors: theme.backgroundColors,
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .transition(.opacity)
+        } else {
+            theme.backgroundColors.first ?? theme.surface
+        }
+    }
+
+    @ViewBuilder
+    private var startupDecoration: some View {
+        if isStartupContentReady {
+            ZStack {
+                // RadialGradient 无需 Metal shader 编译，冷启动更快
+                RadialGradient(
+                    colors: [theme.accent.opacity(0.22), Color.clear],
+                    center: UnitPoint(x: 0.15, y: 0.42),
+                    startRadius: 0,
+                    endRadius: 220
+                )
+                RadialGradient(
+                    colors: [theme.accentSecondary.opacity(0.18), Color.clear],
+                    center: UnitPoint(x: 0.88, y: 0.82),
+                    startRadius: 0,
+                    endRadius: 190
+                )
+            }
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+            .transition(.opacity)
+        }
+    }
+
+    private func scrollToTopTapTarget(action: @escaping () -> Void) -> some View {
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .frame(height: proxy.safeAreaInsets.top + 10)
+                    .onTapGesture(perform: action)
+                Spacer(minLength: 0)
+            }
+            .ignoresSafeArea(edges: .top)
         }
     }
 
@@ -401,7 +450,7 @@ struct ContentView: View {
                     .tracking(2)
 
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 12) {
-                    ForEach(supportedPlatforms, id: \.name) { platform in
+                    ForEach(Self.supportedPlatforms, id: \.name) { platform in
                         HStack(spacing: 6) {
                             Circle()
                                 .fill(platform.color)
@@ -450,6 +499,41 @@ struct ContentView: View {
             }
         } else {
             search()
+        }
+    }
+
+    private func scrollToTop(using proxy: ScrollViewProxy) {
+        buttonFeedback()
+        withAnimation(.easeOut(duration: 0.28)) {
+            proxy.scrollTo(Self.scrollTopID, anchor: .top)
+        }
+    }
+
+    private func startStartupSequenceIfNeeded() {
+        guard !hasStartedStartupSequence else { return }
+        hasStartedStartupSequence = true
+        loadThemePreference()
+        prewarmStartupWork()
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.startupDelayNanoseconds)
+            loadHistoryFromStorage()
+            withAnimation(.easeOut(duration: 0.18)) {
+                isStartupContentReady = true
+            }
+        }
+    }
+
+    private func prewarmStartupWork() {
+        Task.detached(priority: .utility) {
+            _ = JSONDecoder()
+            _ = JSONEncoder()
+        }
+
+        Task { @MainActor in
+            _ = Self.urlDetector
+            let generator = UIImpactFeedbackGenerator(style: .medium)
+            generator.prepare()
         }
     }
 
@@ -547,7 +631,7 @@ struct ContentView: View {
         }
     }
 
-    private let supportedPlatforms: [(name: String, color: Color)] = [
+    private static let supportedPlatforms: [(name: String, color: Color)] = [
         (name: "Spotify",       color: Color(.sRGB, red: 0.114, green: 0.725, blue: 0.329)),
         (name: "Apple Music",   color: Color(.sRGB, red: 0.988, green: 0.235, blue: 0.267)),
         (name: "YouTube Music", color: Color(.sRGB, red: 1.0,   green: 0.0,   blue: 0.0)),
@@ -640,4 +724,3 @@ struct APISettingsSheet: View {
         }
     }
 }
-

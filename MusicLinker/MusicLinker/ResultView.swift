@@ -17,7 +17,9 @@ class AlbumCoverService {
         guard let url = URL(string: urlString) else { return nil }
         
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 6
+            let (data, _) = try await URLSession.shared.data(for: request)
             let response = try JSONDecoder().decode(LastFmResponse.self, from: data)
             
             // Try to get the largest image
@@ -943,16 +945,22 @@ struct ResultView: View {
         guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
             throw NSError(domain: "ResultView", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法构造请求"])
         }
+        if let url = try await searchITunesPreview(query: encodedQuery) {
+            return url
+        }
         if let url = try await searchDeezerPreview(query: encodedQuery) {
             return url
         }
         guard let token = try await fetchSpotifyAccessToken() else {
             throw NSError(domain: "ResultView", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法获取token"])
         }
-        guard let url = URL(string: "https://api.spotify.com/v1/search?q=track:\"\(result.title)\" artist:\"\(result.artist)\"&type=track&limit=5") else {
+        let spotifyQuery = "track:\"\(result.title)\" artist:\"\(result.artist)\""
+        guard let encodedSpotifyQuery = spotifyQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://api.spotify.com/v1/search?q=\(encodedSpotifyQuery)&type=track&limit=5") else {
             throw NSError(domain: "ResultView", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法构造请求"])
         }
         var request = URLRequest(url: url)
+        request.timeoutInterval = 8
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, _) = try await URLSession.shared.data(for: request)
@@ -965,12 +973,61 @@ struct ResultView: View {
         return previewLink
     }
 
+    private func searchITunesPreview(query: String) async throws -> URL? {
+        let countries = ["CN", "US", "JP", "GB"]
+        for country in countries {
+            guard let url = URL(string: "https://itunes.apple.com/search?term=\(query)&media=music&entity=song&limit=5&country=\(country)") else {
+                continue
+            }
+
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 6
+            let (data, _) = try await URLSession.shared.data(for: request)
+            let searchResponse = try JSONDecoder().decode(ITunesSearchResponse.self, from: data)
+
+            guard let previewString = bestITunesPreview(from: searchResponse.results),
+                  let previewLink = URL(string: previewString) else {
+                continue
+            }
+            return previewLink
+        }
+
+        return nil
+    }
+
+    private func bestITunesPreview(from tracks: [ITunesTrack]) -> String? {
+        let title = result.title.normalizedForPreviewMatch
+        let artist = result.artist.normalizedForPreviewMatch
+
+        let exactMatch = tracks.first { track in
+            track.trackName?.normalizedForPreviewMatch == title &&
+            track.artistName?.normalizedForPreviewMatch == artist &&
+            track.previewUrl != nil
+        }
+        if let previewUrl = exactMatch?.previewUrl {
+            return previewUrl
+        }
+
+        let artistMatch = tracks.first { track in
+            guard let previewUrl = track.previewUrl else { return false }
+            let trackArtist = track.artistName?.normalizedForPreviewMatch ?? ""
+            return !previewUrl.isEmpty && !artist.isEmpty && trackArtist.contains(artist)
+        }
+        if let previewUrl = artistMatch?.previewUrl {
+            return previewUrl
+        }
+
+        return tracks.first { !($0.previewUrl ?? "").isEmpty }?.previewUrl
+    }
+
     private func searchDeezerPreview(query: String) async throws -> URL? {
         guard let url = URL(string: "https://api.deezer.com/search?q=\(query)&limit=1") else {
             return nil
         }
 
-        let (data, _) = try await URLSession.shared.data(from: url)
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 6
+        let (data, _) = try await URLSession.shared.data(for: request)
         let searchResponse = try JSONDecoder().decode(DeezerSearchResponse.self, from: data)
 
         guard let track = searchResponse.data.first,
@@ -988,6 +1045,7 @@ struct ResultView: View {
         }
 
         var request = URLRequest(url: url)
+        request.timeoutInterval = 8
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148", forHTTPHeaderField: "User-Agent")
 
@@ -1007,7 +1065,9 @@ struct ResultView: View {
         guard let urlString = urlString,
               let url = URL(string: urlString) else { return }
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 6
+            let (data, _) = try await URLSession.shared.data(for: request)
             guard let image = UIImage(data: data) else { return }
             let colors = image.extractPalette()
             await MainActor.run {
@@ -1158,12 +1218,6 @@ struct ResultView: View {
             return nil
         }
 
-        // 清洗：去掉空行、引号，取前 3 行
-        let resultLines = content
-            .components(separatedBy: "\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines)
-                      .trimmingCharacters(in: CharacterSet(charactersIn: "\"“”")) }
-            .filter { !$0.isEmpty }
         // 解析 LINES: 和 KEY: 两段
         var lyricLines: [String] = []
         var keyPhrase: String = ""
@@ -1463,7 +1517,17 @@ struct ActivityViewController: UIViewControllerRepresentable {
     }
 }
 
-// MARK: - Spotify Preview Models
+// MARK: - Preview Models
+
+private struct ITunesSearchResponse: Codable {
+    let results: [ITunesTrack]
+}
+
+private struct ITunesTrack: Codable {
+    let trackName: String?
+    let artistName: String?
+    let previewUrl: String?
+}
 
 private struct SpotifyTokenResponse: Codable {
     let accessToken: String
@@ -1512,6 +1576,14 @@ private struct SpotifyImage: Codable {
     let url: String?
     let height: Int?
     let width: Int?
+}
+
+private extension String {
+    var normalizedForPreviewMatch: String {
+        folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .replacingOccurrences(of: " ", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 extension UIImage {
@@ -1584,7 +1656,8 @@ extension UIImage {
                 bestS = ps; bestH = ph; bestBr = pb
             }
         }
-        var h = bestH, s = bestS, br = bestBr
+        let h = bestH
+        let s = bestS
 
         // dominant 高饱和压暗，做深色背景
         let darkDominant = UIColor(hue: h, saturation: min(s * 1.0, 1), brightness: min(bestBr * 0.35, 0.45), alpha: 1)
