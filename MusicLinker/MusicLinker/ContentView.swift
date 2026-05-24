@@ -8,6 +8,7 @@
 import SwiftUI
 import Combine
 import UIKit
+import MediaPlayer
 
 // MARK: - Search History Model
 struct SearchHistoryItem: Identifiable, Codable {
@@ -42,7 +43,9 @@ struct ContentView: View {
     private static let startupDelayNanoseconds: UInt64 = 120_000_000
     @StateObject private var service = OdesliService()
     @EnvironmentObject var languageManager: LanguageManager
-    
+    @EnvironmentObject var incomingURLState: IncomingURLState
+    @Environment(\.scenePhase) private var scenePhase
+
     @State private var inputURL = ""
     @State private var isShowingResult = false
     @State private var theme: AppTheme = .dark
@@ -57,6 +60,9 @@ struct ContentView: View {
     @State private var neteaseAPIURL = ""
     @State private var hasStartedStartupSequence = false
     @State private var isStartupContentReady = false
+    @State private var lastPasteboardChangeCount: Int = 0
+
+    private let feedbackGenerator = UIImpactFeedbackGenerator(style: .medium)
 
     var body: some View {
         NavigationStack {
@@ -116,44 +122,44 @@ struct ContentView: View {
         .onAppear {
             startStartupSequenceIfNeeded()
         }
-    }
-
-    @ViewBuilder
-    private var startupBackground: some View {
-        if isStartupContentReady {
-            LinearGradient(
-                colors: theme.backgroundColors,
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .transition(.opacity)
-        } else {
-            theme.backgroundColors.first ?? theme.surface
-        }
-    }
-
-    @ViewBuilder
-    private var startupDecoration: some View {
-        if isStartupContentReady {
-            ZStack {
-                // RadialGradient 无需 Metal shader 编译，冷启动更快
-                RadialGradient(
-                    colors: [theme.accent.opacity(0.22), Color.clear],
-                    center: UnitPoint(x: 0.15, y: 0.42),
-                    startRadius: 0,
-                    endRadius: 220
-                )
-                RadialGradient(
-                    colors: [theme.accentSecondary.opacity(0.18), Color.clear],
-                    center: UnitPoint(x: 0.88, y: 0.82),
-                    startRadius: 0,
-                    endRadius: 190
-                )
+        .onChange(of: scenePhase) { phase in
+            if phase == .active {
+                checkIncomingURL()
             }
-            .ignoresSafeArea()
-            .allowsHitTesting(false)
-            .transition(.opacity)
         }
+        .onChange(of: incomingURLState.pendingURL) { url in
+            guard let url = url else { return }
+            inputURL = url
+            incomingURLState.pendingURL = nil
+            search()
+        }
+    }
+
+    private var startupBackground: some View {
+        LinearGradient(
+            colors: theme.backgroundColors,
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private var startupDecoration: some View {
+        ZStack {
+            RadialGradient(
+                colors: [theme.accent.opacity(0.22), Color.clear],
+                center: UnitPoint(x: 0.15, y: 0.42),
+                startRadius: 0,
+                endRadius: 220
+            )
+            RadialGradient(
+                colors: [theme.accentSecondary.opacity(0.18), Color.clear],
+                center: UnitPoint(x: 0.88, y: 0.82),
+                startRadius: 0,
+                endRadius: 190
+            )
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
     }
 
     private func scrollToTopTapTarget(action: @escaping () -> Void) -> some View {
@@ -308,6 +314,17 @@ struct ContentView: View {
             }
 
             HStack(spacing: 12) {
+                Button(action: detectNowPlaying) {
+                    Image(systemName: "music.note.list")
+                        .font(.system(size: 15))
+                        .foregroundColor(theme.accent)
+                        .frame(width: 32, height: 32)
+                        .background(
+                            Circle()
+                                .fill(theme.accent.opacity(0.12))
+                        )
+                }
+
                 TextField("", text: $inputURL, prompt: Text(languageManager.translate("search.placeholder"))
                     .foregroundColor(theme.textSecondary.opacity(0.6))
                     .font(.system(size: 14))
@@ -481,7 +498,46 @@ struct ContentView: View {
     }
 
     // MARK: - Actions
-    
+
+    private func detectNowPlaying() {
+        buttonFeedback()
+
+        let status = MPMediaLibrary.authorizationStatus()
+        switch status {
+        case .authorized:
+            readNowPlayingAndSearch()
+        case .notDetermined:
+            MPMediaLibrary.requestAuthorization { newStatus in
+                DispatchQueue.main.async {
+                    if newStatus == .authorized {
+                        readNowPlayingAndSearch()
+                    }
+                }
+            }
+        case .denied, .restricted:
+            inputURL = ""
+            isInputFocused = true
+        @unknown default:
+            break
+        }
+    }
+
+    private func readNowPlayingAndSearch() {
+        let player = MPMusicPlayerController.systemMusicPlayer
+        guard let song = player.nowPlayingItem,
+              let title = song.title else {
+            inputURL = ""
+            isInputFocused = true
+            return
+        }
+
+        let artist = song.artist ?? ""
+
+        Task {
+            await service.fetchByTitleArtist(title: title, artist: artist)
+        }
+    }
+
     private func pasteFromClipboard() {
         buttonFeedback()
         if let string = UIPasteboard.general.string {
@@ -491,15 +547,8 @@ struct ContentView: View {
     }
     
     private func searchButtonTapped() {
-        if isInputFocused {
-            isInputFocused = false
-            Task {
-                await Task.yield()
-                search()
-            }
-        } else {
-            search()
-        }
+        isInputFocused = false
+        search()
     }
 
     private func scrollToTop(using proxy: ScrollViewProxy) {
@@ -515,13 +564,70 @@ struct ContentView: View {
         loadThemePreference()
         prewarmStartupWork()
 
+        // 记录启动时的剪贴板状态，避免触发旧内容
+        lastPasteboardChangeCount = UIPasteboard.general.changeCount
+
+        // 立即检查一次剪贴板（冷启动时 Share Extension 已经写了）
+        checkIncomingURL()
+
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: Self.startupDelayNanoseconds)
             loadHistoryFromStorage()
             withAnimation(.easeOut(duration: 0.18)) {
                 isStartupContentReady = true
             }
+            // 启动完成后再次检查（兜底）
+            checkIncomingURL()
         }
+    }
+
+    private func checkIncomingURL() {
+        // 1. URL Scheme 唤醒
+        if let url = incomingURLState.pendingURL {
+            incomingURLState.pendingURL = nil
+            inputURL = url
+            search()
+            return
+        }
+
+        // 2. App Groups 共享容器
+        if let shared = UserDefaults(suiteName: "group.com.musiclinker.app") {
+            if let url = shared.string(forKey: "sharedMusicURL"), !url.isEmpty {
+                shared.removeObject(forKey: "sharedMusicURL")
+                shared.synchronize()
+                print("📦 主 App 读取 App Groups ✅: \(url)")
+                inputURL = url
+                search()
+                return
+            }
+        } else {
+            print("❌ 主 App App Groups 未配置")
+        }
+
+        // 3. 剪贴板（兜底）
+        let currentChangeCount = UIPasteboard.general.changeCount
+        guard currentChangeCount != lastPasteboardChangeCount else { return }
+        lastPasteboardChangeCount = currentChangeCount
+
+        guard UIPasteboard.general.hasStrings,
+              let text = UIPasteboard.general.string,
+              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return }
+
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = detector.firstMatch(in: text, options: [], range: range),
+              let url = match.url else { return }
+
+        let urlString = url.absoluteString
+        let domains = [
+            "open.spotify.com", "music.apple.com", "itunes.apple.com",
+            "music.163.com", "y.music.163.com", "163cn.tv",
+            "y.qq.com", "music.youtube.com", "tidal.com",
+            "deezer.com", "soundcloud.com", "song.link", "odesli.co"
+        ]
+        guard domains.contains(where: { urlString.contains($0) }) else { return }
+
+        inputURL = urlString
+        search()
     }
 
     private func prewarmStartupWork() {
@@ -532,8 +638,7 @@ struct ContentView: View {
 
         Task { @MainActor in
             _ = Self.urlDetector
-            let generator = UIImpactFeedbackGenerator(style: .medium)
-            generator.prepare()
+            feedbackGenerator.prepare()
         }
     }
 
@@ -565,7 +670,7 @@ struct ContentView: View {
 
     private func selectTheme(_ newTheme: AppTheme) {
         buttonFeedback()
-        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+        withAnimation(.easeInOut(duration: 0.25)) {
             theme = newTheme
         }
         saveThemePreference(newTheme)
@@ -583,8 +688,8 @@ struct ContentView: View {
     }
 
     private func buttonFeedback() {
-        let generator = UIImpactFeedbackGenerator(style: .medium)
-        generator.impactOccurred()
+        feedbackGenerator.impactOccurred()
+        feedbackGenerator.prepare()
     }
 
     private func saveToHistory(url: String, title: String? = nil, artist: String? = nil) {
@@ -608,9 +713,7 @@ struct ContentView: View {
     private func selectHistoryItem(_ item: SearchHistoryItem) {
         inputURL = item.url
         buttonFeedback()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            search()
-        }
+        search()
     }
 
     private func clearSearchHistory() {

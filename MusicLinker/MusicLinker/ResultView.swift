@@ -234,6 +234,7 @@ struct ResultView: View {
     @State private var isPlayingPreview: Bool = false
     @State private var audioPlayer: AVPlayer? = nil
     @State private var errorMessage: String? = nil
+    private let feedbackGenerator = UIImpactFeedbackGenerator(style: .medium)
     @State private var lastFmCoverUrl: String?
     @State private var posterMode: PosterMode = .cover
     @State private var posterStyle: PosterStyle = .dynamic
@@ -1061,47 +1062,79 @@ struct ResultView: View {
     }
 
     private func loadCoverImage() async {
-        let urlString = result.thumbnailUrl ?? lastFmCoverUrl
-        guard let urlString = urlString,
-              let url = URL(string: urlString) else { return }
-        do {
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 6
-            let (data, _) = try await URLSession.shared.data(for: request)
-            guard let image = UIImage(data: data) else { return }
-            let colors = image.extractPalette()
+        let placeholderPatterns = ["default", "image_not_available", "placeholder", "fastly.net/i/u/"]
+
+        func tryLoad(from urlString: String?) async -> UIImage? {
+            guard let urlString = urlString, let url = URL(string: urlString) else { return nil }
+            do {
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 6
+                let (data, _) = try await URLSession.shared.data(for: request)
+                return UIImage(data: data)
+            } catch {
+                return nil
+            }
+        }
+
+        // 优先尝试 result 提供的封面
+        if let img = await tryLoad(from: result.thumbnailUrl) {
+            // 检查 URL 是否为占位图（简单字符串匹配）或图片尺寸过小
+            let isPlaceholder = placeholderPatterns.contains(where: { pattern in
+                (result.thumbnailUrl ?? "").localizedCaseInsensitiveContains(pattern)
+            })
+            if !isPlaceholder && img.size.width >= 50 && img.size.height >= 50 {
+                let colors = img.extractPalette()
+                await MainActor.run {
+                    coverUIImage = img
+                    dominantColor = colors[0]
+                    secondaryColor = colors[1]
+                    tertiaryColor = colors[2]
+                }
+                return
+            }
+        }
+
+        // 若首选封面不可用或可能为占位图，尝试 Last.fm（基于歌手+专辑）
+        if let album = result.album, !album.isEmpty {
+            if let lastFmUrl = await AlbumCoverService.fetchAlbumCover(artist: result.artist, album: album), let img = await tryLoad(from: lastFmUrl) {
+                let colors = img.extractPalette()
+                await MainActor.run {
+                    lastFmCoverUrl = lastFmUrl
+                    coverUIImage = img
+                    dominantColor = colors[0]
+                    secondaryColor = colors[1]
+                    tertiaryColor = colors[2]
+                }
+                return
+            }
+        }
+
+        // 最后回退：尝试任何可用的 URL（包括 lastFmCoverUrl）
+        if let img = await tryLoad(from: lastFmCoverUrl ?? result.thumbnailUrl) {
+            let colors = img.extractPalette()
             await MainActor.run {
-                coverUIImage = image
+                coverUIImage = img
                 dominantColor = colors[0]
                 secondaryColor = colors[1]
                 tertiaryColor = colors[2]
             }
-        } catch {}
+        }
     }
 
     // MARK: - 歌词获取：从网易云拿 LRC，重复行检测找副歌/hook
     private func loadFeaturedLyric() async {
         defer { Task { @MainActor in isLoadingLyrics = false } }
 
-        // 先从已有结果里找网易云链接，找不到则用歌名+艺术家搜索
-        var songId: String? = nil
-        if let neteaseLink = result.platforms.first(where: { $0.platformKey == "netease" || $0.displayName == "网易云音乐" }) {
-            songId = extractNeteaseSongId(from: neteaseLink.url)
-        }
-        if songId == nil || songId!.isEmpty {
-            print("🔍 结果里无网易云链接，搜索歌词用 song ID...")
-            songId = await searchNeteaseForSongId(title: result.title, artist: result.artist)
-        }
-        guard let finalSongId = songId, !finalSongId.isEmpty else {
+        guard let source = await resolveLyricSource() else {
             print("❌ 无法获取 song ID，显示歌名")
             await MainActor.run { featuredLyric = result.title }
             return
         }
-        print("🎵 loadFeaturedLyric songId=\(finalSongId)")
+        print("🎵 歌词来源: \(source.reason) songId=\(source.songId) score=\(source.score)")
 
         // 并行：歌词 + 热门评论（哪行 LRC 被热评引用最多 = 最火歌词）
-        async let lrcFetch    = fetchNeteaseLrc(songId: finalSongId)
-        async let commentFetch = fetchNeteaseHotComments(songId: finalSongId)
+        async let lrcFetch = fetchNeteaseLrc(songId: source.songId)
+        async let commentFetch = fetchNeteaseHotComments(songId: source.songId)
         let (lrcText, hotComments) = await (lrcFetch, commentFetch)
         print("💬 热评数=\(hotComments.count)，LRC=\(lrcText == nil ? "nil" : "\(lrcText!.count)chars")")
 
@@ -1121,8 +1154,12 @@ struct ResultView: View {
         // 优先级 1：DeepSeek AI（Key 已配置时）
         if let aiResult = await fetchFeaturedLyricFromAI(
             title: result.title, artist: result.artist, lines: plainLines) {
+            let lyric = deduplicatedLyricBlock(
+                from: aiResult.lyric.components(separatedBy: "\n"),
+                fallbackLines: plainLines
+            )
             await MainActor.run {
-                featuredLyric = aiResult.lyric
+                featuredLyric = lyric
                 featuredKeyPhrase = aiResult.keyPhrase
             }
             return
@@ -1134,7 +1171,11 @@ struct ResultView: View {
                 for (idx, line) in plainLines.enumerated() where line.count >= 5 {
                     if comment.contains(line) {
                         let start = max(0, min(idx, plainLines.count - 3))
-                        let block = plainLines[start ..< (start + 3)].joined(separator: "\n")
+                        let block = deduplicatedLyricBlock(
+                            from: Array(plainLines[start ..< (start + 3)]),
+                            fallbackLines: plainLines,
+                            anchorIndex: idx
+                        )
                         await MainActor.run { featuredLyric = block }
                         return
                     }
@@ -1146,6 +1187,58 @@ struct ResultView: View {
         // 优先级 3：滑动窗口算法
         let line = pickFeaturedLine(from: lrc)
         await MainActor.run { featuredLyric = line }
+    }
+
+    private func resolveLyricSource() async -> LyricSourceCandidate? {
+        var candidates: [LyricSourceCandidate] = []
+
+        if let neteaseLink = result.platforms.first(where: { $0.platformKey == "netease" || $0.displayName == "网易云音乐" }),
+           let songId = extractNeteaseSongId(from: neteaseLink.url) {
+            candidates.append(LyricSourceCandidate(
+                songId: songId,
+                title: result.title,
+                artist: result.artist,
+                sourcePriority: 60,
+                reason: "结果里的网易云链接"
+            ))
+        }
+
+        let queryVariants = lyricSearchQueryVariants(title: result.title, artist: result.artist)
+        for query in queryVariants {
+            let searched = await searchNeteaseLyricCandidates(query: query)
+            candidates.append(contentsOf: searched)
+        }
+
+        let uniqueCandidates = Dictionary(grouping: candidates, by: \.songId)
+            .compactMap { $0.value.max(by: { $0.score < $1.score }) }
+        let ranked = uniqueCandidates
+            .map { $0.scored(forTitle: result.title, artist: result.artist) }
+            .sorted { $0.score > $1.score }
+
+        if let best = ranked.first {
+            print("🎯 歌词候选 Top: \(ranked.prefix(3).map { "\($0.songId):\($0.score)" }.joined(separator: ", "))")
+            return best
+        }
+
+        return nil
+    }
+
+    private func lyricSearchQueryVariants(title: String, artist: String) -> [String] {
+        let cleanTitle = title.removingBracketedSuffixes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanArtist = artist.removingFeaturedArtists.trimmingCharacters(in: .whitespacesAndNewlines)
+        let variants = [
+            "\(title) \(artist)",
+            "\(cleanTitle) \(cleanArtist)",
+            cleanTitle,
+            title
+        ]
+        var seen: Set<String> = []
+        return variants.filter { query in
+            let normalized = query.normalizedForPreviewMatch
+            guard !normalized.isEmpty, !seen.contains(normalized) else { return false }
+            seen.insert(normalized)
+            return true
+        }
     }
 
     // MARK: - Groq AI 歌词选取
@@ -1270,11 +1363,44 @@ struct ResultView: View {
         return lines
     }
 
-    /// 用歌名+艺术家搜索网易云，返回 song ID 字符串
-    private func searchNeteaseForSongId(title: String, artist: String) async -> String? {
-        let query = "\(title) \(artist)"
+    private func deduplicatedLyricBlock(
+        from preferredLines: [String],
+        fallbackLines: [String],
+        anchorIndex: Int? = nil
+    ) -> String {
+        var selected: [String] = []
+        var seen: Set<String> = []
+
+        func appendIfFresh(_ rawLine: String) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = line.normalizedForLyricUniqueness
+            guard !line.isEmpty, key.count >= 2, !seen.contains(key) else { return }
+            selected.append(line)
+            seen.insert(key)
+        }
+
+        preferredLines.forEach(appendIfFresh)
+
+        if selected.count < 3, let anchorIndex {
+            let lower = max(0, anchorIndex - 4)
+            let upper = min(fallbackLines.count - 1, anchorIndex + 4)
+            if lower <= upper {
+                fallbackLines[lower...upper].forEach(appendIfFresh)
+            }
+        }
+
+        if selected.count < 3 {
+            fallbackLines.forEach(appendIfFresh)
+        }
+
+        let result = Array(selected.prefix(3))
+        return result.isEmpty ? self.result.title : result.joined(separator: "\n")
+    }
+
+    /// 用歌名+艺术家搜索网易云，返回可评分的歌词候选
+    private func searchNeteaseLyricCandidates(query: String) async -> [LyricSourceCandidate] {
         guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "https://music.163.com/api/search/get?s=\(encoded)&type=1&limit=5&offset=0") else { return nil }
+              let url = URL(string: "https://music.163.com/api/search/get?s=\(encoded)&type=1&limit=8&offset=0") else { return [] }
         var req = URLRequest(url: url)
         req.timeoutInterval = 8
         req.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
@@ -1282,18 +1408,24 @@ struct ResultView: View {
         guard let (data, _) = try? await URLSession.shared.data(for: req),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let resultObj = json["result"] as? [String: Any],
-              let songs = resultObj["songs"] as? [[String: Any]], !songs.isEmpty else { return nil }
-        // 优先艺术家名匹配
-        let artistLower = artist.lowercased()
-        var best = songs[0]
-        for song in songs {
-            let names = (song["artists"] as? [[String: Any]] ?? [])
-                .compactMap { $0["name"] as? String }.joined(separator: " ").lowercased()
-            if !artistLower.isEmpty && names.contains(artistLower) { best = song; break }
+              let songs = resultObj["songs"] as? [[String: Any]], !songs.isEmpty else { return [] }
+
+        let candidates = songs.enumerated().compactMap { index, song -> LyricSourceCandidate? in
+            guard let id = song["id"] as? Int else { return nil }
+            let title = song["name"] as? String ?? ""
+            let artist = (song["artists"] as? [[String: Any]] ?? [])
+                .compactMap { $0["name"] as? String }
+                .joined(separator: " ")
+            return LyricSourceCandidate(
+                songId: String(id),
+                title: title,
+                artist: artist,
+                sourcePriority: max(0, 42 - index * 4),
+                reason: "网易云搜索: \(query)"
+            )
         }
-        guard let id = best["id"] as? Int else { return nil }
-        print("✅ 搜索到网易云 song ID: \(id) for \(title)")
-        return String(id)
+        print("🔍 歌词搜索 \(query) -> \(candidates.count) 个候选")
+        return candidates
     }
 
     /// 获取网易云 LRC 原始文本
@@ -1389,8 +1521,9 @@ struct ResultView: View {
             all.append(LLine(time: min * 60 + sec, text: text))
         }
 
+        let fallbackLines = all.map(\.text)
         guard all.count >= 3 else {
-            return all.isEmpty ? result.title : all.map(\.text).joined(separator: "\n")
+            return all.isEmpty ? result.title : deduplicatedLyricBlock(from: fallbackLines, fallbackLines: fallbackLines)
         }
 
         // 2. 3行滑动窗口：副歌是整块重复，找出现次数最多的3行组合
@@ -1401,7 +1534,11 @@ struct ResultView: View {
             else { winFreq[key]!.count += 1 }
         }
         if let best = winFreq.max(by: { $0.value.count < $1.value.count }), best.value.count >= 2 {
-            return best.key   // 命中！这就是副歌
+            return deduplicatedLyricBlock(
+                from: best.key.components(separatedBy: "\n"),
+                fallbackLines: fallbackLines,
+                anchorIndex: best.value.idx
+            )
         }
 
         // 3. 没有重复块 → 回退到单行重复，然后取锚点前后共3行
@@ -1410,7 +1547,11 @@ struct ResultView: View {
         if let bestLine = lineFreq.max(by: { $0.value < $1.value }), bestLine.value >= 2,
            let anchorIdx = all.firstIndex(where: { $0.text == bestLine.key }) {
             let start = max(0, min(anchorIdx, all.count - 3))
-            return all[start..<(start + 3)].map(\.text).joined(separator: "\n")
+            return deduplicatedLyricBlock(
+                from: all[start..<(start + 3)].map(\.text),
+                fallbackLines: fallbackLines,
+                anchorIndex: anchorIdx
+            )
         }
 
         // 4. 完全没有重复 → 用时间戳找 42% 位置（流行歌副歌通常在这里）
@@ -1421,12 +1562,20 @@ struct ResultView: View {
                 .min(by: { abs($0.element.time - target) < abs($1.element.time - target) })?.offset
                 ?? (all.count / 2)
             let start = max(0, min(anchor, all.count - 3))
-            return all[start..<(start + 3)].map(\.text).joined(separator: "\n")
+            return deduplicatedLyricBlock(
+                from: all[start..<(start + 3)].map(\.text),
+                fallbackLines: fallbackLines,
+                anchorIndex: anchor
+            )
         }
 
         // 最终保险
         let start = max(0, all.count / 2 - 1)
-        return all[start..<(start + 3)].map(\.text).joined(separator: "\n")
+        return deduplicatedLyricBlock(
+            from: all[start..<(start + 3)].map(\.text),
+            fallbackLines: fallbackLines,
+            anchorIndex: start
+        )
     }
 
     private func extractNeteaseSongId(from url: String) -> String? {
@@ -1472,7 +1621,7 @@ struct ResultView: View {
         buttonFeedback()
         let standardizedURL = standardizeAppleMusicURL(urlString)
         UIPasteboard.general.string = standardizedURL
-        withAnimation(.spring(response: 0.3)) {
+        withAnimation(.easeInOut(duration: 0.2)) {
             copiedURL = urlString
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
@@ -1489,8 +1638,8 @@ struct ResultView: View {
     }
 
     private func buttonFeedback() {
-        let generator = UIImpactFeedbackGenerator(style: .medium)
-        generator.impactOccurred()
+        feedbackGenerator.impactOccurred()
+        feedbackGenerator.prepare()
     }
 }
 
@@ -1517,7 +1666,52 @@ struct ActivityViewController: UIViewControllerRepresentable {
     }
 }
 
-// MARK: - Preview Models
+// MARK: - Lyrics / Preview Models
+
+private struct LyricSourceCandidate {
+    let songId: String
+    let title: String
+    let artist: String
+    let sourcePriority: Int
+    let reason: String
+    var score: Int = 0
+
+    func scored(forTitle targetTitle: String, artist targetArtist: String) -> LyricSourceCandidate {
+        var copy = self
+        let candidateTitle = title.normalizedForPreviewMatch
+        let candidateArtist = artist.normalizedForPreviewMatch
+        let requestedTitle = targetTitle.normalizedForPreviewMatch
+        let requestedArtist = targetArtist.normalizedForPreviewMatch
+        let cleanRequestedTitle = targetTitle.removingBracketedSuffixes.normalizedForPreviewMatch
+        let cleanCandidateTitle = title.removingBracketedSuffixes.normalizedForPreviewMatch
+
+        var value = sourcePriority
+        if candidateTitle == requestedTitle {
+            value += 90
+        } else if cleanCandidateTitle == cleanRequestedTitle {
+            value += 78
+        } else if candidateTitle.contains(requestedTitle) || requestedTitle.contains(candidateTitle) {
+            value += 48
+        } else if cleanCandidateTitle.contains(cleanRequestedTitle) || cleanRequestedTitle.contains(cleanCandidateTitle) {
+            value += 36
+        }
+
+        if !requestedArtist.isEmpty {
+            if candidateArtist == requestedArtist || candidateArtist.contains(requestedArtist) || requestedArtist.contains(candidateArtist) {
+                value += 44
+            } else if targetArtist.artistTokens.contains(where: { candidateArtist.contains($0) }) {
+                value += 22
+            }
+        }
+
+        if title.looksLikeAlternateVersion(comparedTo: targetTitle) {
+            value -= 24
+        }
+
+        copy.score = value
+        return copy
+    }
+}
 
 private struct ITunesSearchResponse: Codable {
     let results: [ITunesTrack]
@@ -1581,8 +1775,39 @@ private struct SpotifyImage: Codable {
 private extension String {
     var normalizedForPreviewMatch: String {
         folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .replacingOccurrences(of: "[\\p{P}\\p{S}]", with: "", options: .regularExpression)
             .replacingOccurrences(of: " ", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var normalizedForLyricUniqueness: String {
+        folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .replacingOccurrences(of: #"\s+"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"[-—_.,，。!！?？'’"“”]+"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var removingBracketedSuffixes: String {
+        replacingOccurrences(of: #"[\(\（\[\【].*?[\)\）\]\】]"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+-\s+(live|remix|edit|version|伴奏|纯音乐).*$"#, with: "", options: [.regularExpression, .caseInsensitive])
+    }
+
+    var removingFeaturedArtists: String {
+        replacingOccurrences(of: #"\s*(feat\.?|ft\.?|with|/|、|，|,|&).*$"#, with: "", options: [.regularExpression, .caseInsensitive])
+    }
+
+    var artistTokens: [String] {
+        removingFeaturedArtists
+            .components(separatedBy: CharacterSet(charactersIn: " /、，,&"))
+            .map { $0.normalizedForPreviewMatch }
+            .filter { $0.count >= 2 }
+    }
+
+    func looksLikeAlternateVersion(comparedTo original: String) -> Bool {
+        let originalNormalized = original.normalizedForPreviewMatch
+        let selfNormalized = normalizedForPreviewMatch
+        let alternateWords = ["live", "remix", "edit", "version", "instrumental", "伴奏", "纯音乐", "翻唱", "cover"]
+        return alternateWords.contains { selfNormalized.contains($0) && !originalNormalized.contains($0) }
     }
 }
 
@@ -1776,7 +2001,7 @@ struct PlatformLinkRow: View {
                                 )
                         )
                 }
-                .animation(.spring(response: 0.3), value: isCopied)
+                .animation(.easeInOut(duration: 0.2), value: isCopied)
 
                 // Open button
                 Button(action: onOpen) {

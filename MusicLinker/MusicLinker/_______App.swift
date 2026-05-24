@@ -6,13 +6,26 @@
 //
 
 import SwiftUI
+import Combine
 
 @main
 struct _______App: App {
+    @StateObject private var incomingURLState = IncomingURLState()
+
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(LanguageManager.shared)
+                .environmentObject(incomingURLState)
+                .onOpenURL { url in
+                    if let musicURL = URLHandler.extractMusicURL(from: url) {
+                        incomingURLState.pendingURL = musicURL
+                    }
+                }
         }
     }
+}
+
+final class IncomingURLState: ObservableObject {
+    @Published var pendingURL: String?
 }
